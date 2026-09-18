@@ -1,0 +1,153 @@
+{
+  "name": "SyncJob",
+  "module": "FDE Component",
+  "doctype": "DocType",
+  "istable": 0,
+  "istree": 0,
+  "engine": "InnoDB",
+  "modified": "2026-01-01 00:00:00.000000",
+  "fields": [
+    {
+      "fieldname": "job_type",
+      "fieldtype": "Data",
+      "label": "Job Type",
+      "reqd": 1,
+      "in_list_view": 1,
+      "in_standard_filter": 1
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "\nQueued\nRunning\nInterrupted\nCompleted\nFailed\nDead Lettered",
+      "default": "Queued",
+      "reqd": 1,
+      "in_list_view": 1,
+      "in_standard_filter": 1
+    },
+    {
+      "fieldname": "total_records",
+      "fieldtype": "Int",
+      "label": "Total Records",
+      "default": 0
+    },
+    {
+      "fieldname": "processed",
+      "fieldtype": "Int",
+      "label": "Processed",
+      "default": 0
+    },
+    {
+      "fieldname": "failed_count",
+      "fieldtype": "Int",
+      "label": "Failed",
+      "default": 0
+    },
+    {
+      "fieldname": "retry_count",
+      "fieldtype": "Int",
+      "label": "Retry Count",
+      "default": 0
+    },
+    {
+      "fieldname": "error_summary",
+      "fieldtype": "Small Text",
+      "label": "Error Summary"
+    },
+    {
+      "fieldname": "started_at",
+      "fieldtype": "Datetime",
+      "label": "Started At"
+    },
+    {
+      "fieldname": "completed_at",
+      "fieldtype": "Datetime",
+      "label": "Completed At"
+    },
+    {
+      "fieldname": "last_sync_high_watermark",
+      "fieldtype": "Datetime",
+      "label": "Last Sync High Watermark",
+      "description": "Incremental sync: last modified timestamp seen"
+    },
+    {
+      "fieldname": "source_config",
+      "fieldtype": "JSON",
+      "label": "Source Config",
+      "description": "Opaque JSON with source connection details, query params, etc."
+    },
+    {
+      "fieldname": "column_break_1",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "created_via",
+      "fieldtype": "Select",
+      "label": "Created Via",
+      "options": "\nManual\nScheduler\nAPI",
+      "default": "Manual"
+    },
+    {
+      "fieldname": "schedule",
+      "fieldtype": "Link",
+      "label": "Schedule",
+      "options": "SyncSchedule"
+    },
+    {
+      "fieldname": "section_break_1",
+      "fieldtype": "Section Break",
+      "label": "Lineage"
+    },
+    {
+      "fieldname": "parent_job",
+      "fieldtype": "Link",
+      "label": "Parent Job",
+      "options": "SyncJob",
+      "description": "Set when this job was re-driven from a DLQ entry"
+    },
+    {
+      "fieldname": "checkpoints",
+      "fieldtype": "Table",
+      "label": "Checkpoints",
+      "options": "SyncJobCheckpoint",
+      "description": "Checkpoint rows written as the job progresses"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    },
+    {
+      "role": "FDE",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 0,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    },
+    {
+      "role": "All",
+      "read": 1,
+      "write": 0,
+      "create": 0,
+      "delete": 0,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "autoname": "SJ-.#####",
+  "track_changes": 1,
+  "track_seen": 0
+}
