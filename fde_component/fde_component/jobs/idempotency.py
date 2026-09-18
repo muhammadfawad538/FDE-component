@@ -52,8 +52,11 @@ class IdempotencyKey:
     __slots__ = ("_digest",)
 
     def __init__(self, job_type: str, source_id: str, content: str | bytes = "") -> None:
-        raw = f"{job_type}\x00{source_id}\x00{content}"
-        self._digest: str = hashlib.sha256(raw.encode()).hexdigest()
+        if isinstance(content, bytes):
+            raw_bytes = f"{job_type}\x00{source_id}\x00".encode() + content
+        else:
+            raw_bytes = f"{job_type}\x00{source_id}\x00{content}".encode()
+        self._digest: str = hashlib.sha256(raw_bytes).hexdigest()
 
     @classmethod
     def from_hex(cls, digest: str) -> "IdempotencyKey":
