@@ -30,10 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.14
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.12"
 
       - name: Install system dependencies
         run: |
@@ -65,5 +65,14 @@ jobs:
         run: |
           cd fde_bench
           cp -r ../fde_component apps/fde_component
+          # Patch Python 3.12 compatibility in Frappe
+          python3 -c "
+          with open('apps/frappe/frappe/utils/__init__.py', 'r') as f:
+              content = f.read()
+          content = content.replace('if key in v:', 'if hasattr(v, \"__contains__\") and key in v:')
+          with open('apps/frappe/frappe/utils/__init__.py', 'w') as f:
+              f.write(content)
+          print('Patched')
+          "
           bench --site test.localhost install-app fde_component
           bench --site test.localhost run-tests --app fde_component
