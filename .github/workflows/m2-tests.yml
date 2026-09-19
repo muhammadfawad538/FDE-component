@@ -54,8 +54,10 @@ jobs:
       - name: Initialize bench with Frappe v16
         run: |
           echo "N" | bench init --skip-redis-config-generation fde_bench
-          cd fde_bench
-          bench get-app frappe --branch version-16
+          cd fde_bench/apps/frappe
+          git fetch --tags
+          git checkout -f v16.34.0
+          cd ../..
           bench build
 
       - name: Create site
