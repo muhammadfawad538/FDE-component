@@ -43,12 +43,17 @@ jobs:
           sudo service redis-server start 2>/dev/null || sudo redis-server --daemonize yes
           sleep 5
 
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Install bench
         run: pip install frappe-bench -q
 
       - name: Initialize bench with Frappe v16
         run: |
-          bench init --skip-redis-config-generation fde_bench
+          echo "N" | bench init --skip-redis-config-generation fde_bench
           cd fde_bench
           bench get-app frappe --branch version-16
           bench build
