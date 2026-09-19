@@ -32,7 +32,19 @@ echo "[OK] Redis and MariaDB running"
 
 echo ""
 echo "========================================"
-echo " Step 3/7: Crontab workaround"
+echo " Step 3/7: MariaDB root auth"
+echo "========================================"
+sudo mysql -u root <<'SQL' 2>/dev/null || true
+ALTER USER 'root'@'localhost' IDENTIFIED VIA unix_socket;
+CREATE USER IF NOT EXISTS 'test'@'localhost' IDENTIFIED BY 'test';
+GRANT ALL PRIVILEGES ON *.* TO 'test'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+SQL
+echo "[OK] MariaDB auth configured"
+
+echo ""
+echo "========================================"
+echo " Step 4/7: Crontab workaround"
 echo "========================================"
 sudo bash -c 'echo -e "#!/bin/sh\nexit 0" > /usr/bin/crontab'
 sudo chmod +x /usr/bin/crontab
@@ -40,14 +52,14 @@ echo "[OK] crontab stub in place"
 
 echo ""
 echo "========================================"
-echo " Step 4/7: Install bench"
+echo " Step 5/7: Install bench"
 echo "========================================"
 pip install frappe-bench -q
 echo "[OK] bench installed"
 
 echo ""
 echo "========================================"
-echo " Step 5/7: Initialize bench"
+echo " Step 6/7: Initialize bench"
 echo "========================================"
 cd /workspaces/FDE-component
 rm -rf fde_bench
@@ -57,10 +69,20 @@ echo "[OK] bench initialized at ${BENCH_DIR}"
 
 echo ""
 echo "========================================"
-echo " Step 6/7: Create site"
+echo " Pinning Frappe to stable version"
 echo "========================================"
-bench new-site "${SITE}" \
-    --mariadb-root-password "${MYSQL_ROOT_PW}" \
+cd "${BENCH_DIR}/apps/frappe"
+git checkout version-16
+cd "${BENCH_DIR}"
+echo "[OK] Frappe pinned to version-16"
+
+echo ""
+echo "========================================"
+echo " Step 8/7: Create site"
+echo "========================================"
+echo -e "test\ntest\n" | bench new-site "${SITE}" \
+    --mariadb-root-username test \
+    --mariadb-root-password test \
     --admin-password "${ADMIN_PW}" \
     --force
 echo "[OK] site ${SITE} created"
@@ -101,11 +123,10 @@ redis-server "${BENCH_DIR}/sites/${SITE}/redis_socketio.conf" --daemonize yes
 redis-server "${BENCH_DIR}/sites/${SITE}/redis_queue.conf" --daemonize yes
 echo "[OK] Redis instances started on 11000, 12000, 13000"
 
-# Clone app
-cd "${BENCH_DIR}/apps"
-rm -rf fde_component
-git clone "${APP_URL}" fde_component
-echo "[OK] App cloned"
+# Symlink app from repo
+rm -rf "${BENCH_DIR}/apps/fde_component"
+ln -s /workspaces/FDE-component/fde_component "${BENCH_DIR}/apps/fde_component"
+echo "[OK] App symlinked"
 
 # Install app
 bench --site "${SITE}" install-app fde_component
