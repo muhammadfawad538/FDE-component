@@ -18,7 +18,7 @@ jobs:
           MYSQL_PASSWORD: test
         ports: ["3306:3306"]
         options: >-
-          --health-cmd="mysqladmin ping -h localhost -u root -ptest"
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -ptest"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -38,10 +38,10 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq python3-dev default-mysql-client redis-server
-          sudo service mariadb start
-          sudo service redis-server start
-          sleep 3
+          sudo apt-get install -y -qq python3-dev mariadb-server mariadb-client redis-server
+          sudo service mariadb start 2>/dev/null || sudo mysqld --user=root --datadir=/var/lib/mysql &
+          sudo service redis-server start 2>/dev/null || sudo redis-server --daemonize yes
+          sleep 5
 
       - name: Install bench
         run: pip install frappe-bench -q
@@ -56,6 +56,12 @@ jobs:
       - name: Create site
         run: |
           cd fde_bench
+          # Wait for MariaDB to be ready
+          for i in $(seq 1 30); do
+            mysqladmin ping -h 127.0.0.1 -u root -ptest --silent && break
+            echo "Waiting for MariaDB... ($i)"
+            sleep 2
+          done
           bench new-site test.localhost \
             --mariadb-root-password test \
             --admin-password admin \
