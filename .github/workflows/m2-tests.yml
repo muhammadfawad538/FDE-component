@@ -14,6 +14,8 @@ jobs:
         image: mariadb:10.11
         env:
           MYSQL_ROOT_PASSWORD: test
+          MYSQL_USER: test
+          MYSQL_PASSWORD: test
         ports: ["3306:3306"]
         options: >-
           --health-cmd="mysqladmin ping -h localhost -u root -ptest"
@@ -32,12 +34,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-          cache: "pip"
 
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq mariadb-server redis-server default-mysql-client
+          sudo apt-get install -y -qq python3-dev default-mysql-client redis-server
           sudo service mariadb start
           sudo service redis-server start
           sleep 3
@@ -45,18 +46,17 @@ jobs:
       - name: Install bench
         run: pip install frappe-bench -q
 
-      - name: Initialize bench
+      - name: Initialize bench with Frappe v16
         run: |
           bench init --skip-redis-config-generation fde_bench
           cd fde_bench
-          git fetch --unshallow --tags || true
-          git checkout -f v16.34.0
+          bench get-app frappe --branch version-16
           bench build
 
       - name: Create site
         run: |
           cd fde_bench
-          echo -e "root\n" | bench new-site test.localhost \
+          bench new-site test.localhost \
             --mariadb-root-password test \
             --admin-password admin \
             --force
@@ -65,15 +65,5 @@ jobs:
         run: |
           cd fde_bench
           cp -r ../fde_component apps/fde_component
-          # Patch Python 3.14 compatibility in Frappe
-          python3 -c "
-          import re
-          with open('apps/frappe/frappe/utils/__init__.py', 'r') as f:
-              content = f.read()
-          content = content.replace('if key in v:', 'if hasattr(v, \"__contains__\") and key in v:')
-          with open('apps/frappe/frappe/utils/__init__.py', 'w') as f:
-              f.write(content)
-          print('Patched')
-          "
           bench --site test.localhost install-app fde_component
           bench --site test.localhost run-tests --app fde_component
