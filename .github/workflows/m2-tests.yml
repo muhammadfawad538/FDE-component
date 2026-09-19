@@ -45,28 +45,27 @@ jobs:
 
       - name: Set up bench and run tests
         run: |
-          # Clone Frappe v16
-          git clone --depth 1 --branch version-16 https://github.com/frappe/frappe.git fde_bench/apps/frappe
-
-          # Create bench directory structure
-          mkdir -p fde_bench/sites fde_bench/assets
-
-          # Create Python virtual environment
-          cd fde_bench
-          python3 -m venv env
-          source env/bin/activate
+          # Install bench with correct click version
           pip install -q "click~=8.2.0" frappe-bench
 
-          # Install Frappe in development mode
+          # Initialize bench (non-interactive)
+          echo "N" | bench init --skip-redis-config-generation fde_bench
+          cd fde_bench
+
+          # Switch to Frappe v16
+          cd apps/frappe
+          git fetch --tags
+          git checkout -f v16.34.0
+          cd ../..
+
+          # Install Frappe dependencies
+          source env/bin/activate
           pip install -q -e apps/frappe
 
-          # Initialize bench config (non-interactive)
-          echo "N" | bench init --skip-redis-config-generation .
-
-          # Copy app
+          # Copy our app
           cp -r ../fde_component apps/fde_component
 
-          # Patch Python 3.14 compatibility in Frappe
+          # Patch Python 3.14 compatibility
           python3 -c "
           with open('apps/frappe/frappe/utils/__init__.py', 'r') as f:
               content = f.read()
