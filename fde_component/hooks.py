@@ -16,11 +16,6 @@ app_color = "blue"
 app_email = ""
 app_license = "LGPL-3.0"
 
-# ── DocTypes ──────────────────────────────────────────────────────────────────
-fixtures = [
-    {"dt": "Custom Field", "filters": [["module", "=", "FDE Component"]]},
-]
-
 # ── Scheduled tasks ───────────────────────────────────────────────────────────
 # Keyed by cron expression — each fires the enqueue function for that schedule.
 # Individual SyncSchedule docs drive actual job creation at runtime.
@@ -64,12 +59,19 @@ override_doctype_class = {
 #             → detail view: checkpoint timeline, DLQ tab, resume/re-drive buttons
 doctype_js = {
     "SyncJob": "fde_component/fde_component/doctypes/sync_job/sync_job.js",
+    "SyncSchedule": "fde_component/fde_component/doctypes/sync_schedule/sync_schedule.js",
 }
 
 # ── API methods ───────────────────────────────────────────────────────────────
 api = [
     "fde_component.api.redrive_from_dlq",
     "fde_component.api.resume_job",
+]
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+fixtures = [
+    {"dt": "Custom Field", "filters": [["module", "=", "FDE Component"]]},
+    {"dt": "Property Setter", "filters": [["module", "=", "FDE Component"]]},
 ]
 
 # ── Portal / public pages ─────────────────────────────────────────────────────
