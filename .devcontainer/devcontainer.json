@@ -1,0 +1,8 @@
+{
+  "name": "FDE Component",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "forwardPorts": [8000, 9000],
+  "postCreateCommand": "bash fde_component/setup_bench.sh"
+}
