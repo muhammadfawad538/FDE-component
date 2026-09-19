@@ -55,10 +55,13 @@ jobs:
           cd fde_bench
           python3 -m venv env
           source env/bin/activate
-          pip install -q frappe-bench
+          pip install -q "click~=8.2.0" frappe-bench
 
           # Install Frappe in development mode
           pip install -q -e apps/frappe
+
+          # Initialize bench config (non-interactive)
+          echo "N" | bench init --skip-redis-config-generation .
 
       - name: Create site
         run: |
