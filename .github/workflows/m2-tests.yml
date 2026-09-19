@@ -30,10 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.14
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.12"
 
       - name: Install system dependencies
         run: |
@@ -43,26 +43,36 @@ jobs:
           sudo service redis-server start 2>/dev/null || sudo redis-server --daemonize yes
           sleep 5
 
-      - name: Install bench
-        run: pip install frappe-bench -q
-
-      - name: Initialize bench with Frappe v16
+      - name: Set up bench manually
         run: |
-          echo "N" | bench init --skip-redis-config-generation fde_bench
-          cd fde_bench/apps/frappe
-          git fetch --tags
-          git checkout -f v16.34.0
-          cd ../..
+          # Clone Frappe v16
+          git clone --depth 1 --branch version-16 https://github.com/frappe/frappe.git fde_bench/apps/frappe
+
+          # Create bench directory structure
+          mkdir -p fde_bench/sites fde_bench/assets
+
+          # Create Python virtual environment
+          cd fde_bench
+          python3 -m venv env
+          source env/bin/activate
+          pip install -q frappe-bench
+
+          # Install Frappe in development mode
+          pip install -q -e apps/frappe
 
       - name: Create site
         run: |
           cd fde_bench
-          # Wait for MariaDB to be ready
+          source env/bin/activate
+
+          # Wait for MariaDB
           for i in $(seq 1 30); do
             mysqladmin ping -h 127.0.0.1 -u root -ptest --silent && break
             echo "Waiting for MariaDB... ($i)"
             sleep 2
           done
+
+          # Initialize site
           bench new-site test.localhost \
             --mariadb-root-password test \
             --admin-password admin \
@@ -71,15 +81,13 @@ jobs:
       - name: Install app and run tests
         run: |
           cd fde_bench
+          source env/bin/activate
+
+          # Copy app
           cp -r ../fde_component apps/fde_component
-          # Patch Python 3.12 compatibility in Frappe
-          python3 -c "
-          with open('apps/frappe/frappe/utils/__init__.py', 'r') as f:
-              content = f.read()
-          content = content.replace('if key in v:', 'if hasattr(v, \"__contains__\") and key in v:')
-          with open('apps/frappe/frappe/utils/__init__.py', 'w') as f:
-              f.write(content)
-          print('Patched')
-          "
+
+          # Install app
           bench --site test.localhost install-app fde_component
+
+          # Run tests
           bench --site test.localhost run-tests --app fde_component
