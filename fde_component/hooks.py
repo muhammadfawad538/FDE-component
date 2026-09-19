@@ -60,11 +60,17 @@ override_doctype_class = {
 }
 
 # ── Includes (JS/CSS injected into desk pages) ────────────────────────────────
-# sync_job.js → list view progress bar + filters
-# sync_job_detail.js → detail view: timeline, DLQ tab, resume/re-drive buttons
+# sync_job.js → list view status filters + progress bar
+#             → detail view: checkpoint timeline, DLQ tab, resume/re-drive buttons
 doctype_js = {
     "SyncJob": "fde_component/fde_component/doctypes/sync_job/sync_job.js",
 }
+
+# ── API methods ───────────────────────────────────────────────────────────────
+api = [
+    "fde_component.api.redrive_from_dlq",
+    "fde_component.api.resume_job",
+]
 
 # ── Portal / public pages ─────────────────────────────────────────────────────
 # (none — this is a back-end / desk-only component)
