@@ -118,7 +118,12 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
         raise ValueError(f"Job {job_name} not found")
 
     total = job["total_records"]
-    processed = job["processed"]
+    # Use last checkpoint's records_processed for resume, not offset
+    last_cp = conn.execute(
+        "SELECT records_processed FROM sync_job_checkpoint WHERE parent = ? ORDER BY id DESC LIMIT 1",
+        (job_name,),
+    ).fetchone()
+    processed = last_cp["records_processed"] if last_cp else job["processed"]
     checkpoint_every = 3  # small for demo
     duplicate_count = 0
     use_real_data = job["job_type"] == "customer.import"
@@ -163,11 +168,12 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
                 (job["job_type"], key.hex, record_id, job_name),
             )
 
+            # Count this record BEFORE failure check so it's not lost on crash
+            processed += 1
+
             # Simulate failure
             if fail_after is not None and i >= fail_after:
                 raise RuntimeError("Simulated failure")
-
-            processed += 1
 
             # Update progress
             conn.execute(
@@ -193,7 +199,7 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
             (datetime.now().isoformat(), processed, job_name),
         )
         conn.commit()
-        return JobResult("Completed", processed, 1, duplicate_count)
+        return JobResult("Completed", processed, len(set(range(processed - duplicate_count, processed))), duplicate_count)
 
     except RuntimeError as e:
         # Save checkpoint at failure point and persist processed count
@@ -220,7 +226,7 @@ def resume_job(job_name: str) -> JobResult:
         raise ValueError(f"Job {job_name} is not Interrupted")
 
     conn.execute(
-        "UPDATE sync_job SET status = 'Running' WHERE name = ?",
+        "UPDATE sync_job SET status = 'Running', error_summary = NULL WHERE name = ?",
         (job_name,),
     )
     conn.commit()
