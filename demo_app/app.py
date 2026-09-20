@@ -39,7 +39,8 @@ def init_db() -> None:
             started_at TEXT,
             completed_at TEXT,
             source_config TEXT,
-            created_via TEXT DEFAULT 'Manual'
+            created_via TEXT DEFAULT 'Manual',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS sync_job_checkpoint (
@@ -260,7 +261,7 @@ def main() -> None:
 
 def show_dashboard() -> None:
     conn = get_conn()
-    jobs = conn.execute("SELECT * FROM sync_job ORDER BY created_at DESC").fetchall()
+    jobs = conn.execute("SELECT * FROM sync_job ORDER BY name DESC").fetchall()
     conn.close()
 
     if not jobs:
