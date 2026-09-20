@@ -119,12 +119,12 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
         raise ValueError(f"Job {job_name} not found")
 
     total = job["total_records"]
-    # Use last checkpoint's records_processed for resume, not offset
+    # Use last checkpoint's offset for resume start position
     last_cp = conn.execute(
-        "SELECT records_processed FROM sync_job_checkpoint WHERE parent = ? ORDER BY id DESC LIMIT 1",
+        "SELECT offset FROM sync_job_checkpoint WHERE parent = ? ORDER BY id DESC LIMIT 1",
         (job_name,),
     ).fetchone()
-    processed = last_cp["records_processed"] if last_cp else job["processed"]
+    processed = last_cp["offset"] if last_cp else job["processed"]
     checkpoint_every = 3  # small for demo
     duplicate_count = 0
     use_real_data = job["job_type"] == "customer.import"
@@ -155,7 +155,21 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
                 duplicate_count += 1
                 continue
 
-            # Mark as processed (only if not already marked for this job)
+            # Simulate failure
+            if fail_after is not None and i >= fail_after:
+                # Save failed record to DLQ, but DON'T mark as processed
+                conn.execute(
+                    "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
+                    (job_name, payload, "Simulated failure"),
+                )
+                conn.execute(
+                    "UPDATE sync_job SET failed_count = failed_count + 1 WHERE name = ?",
+                    (job_name,),
+                )
+                conn.commit()
+                continue  # skip this record, don't count it
+
+            # Mark as processed (only after successful processing)
             already = conn.execute(
                 "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
                 (job["job_type"], key.hex, job_name),
@@ -169,12 +183,8 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
                 (job["job_type"], key.hex, record_id, job_name),
             )
 
-            # Count this record BEFORE failure check so it's not lost on crash
+            # Count this record as processed
             processed += 1
-
-            # Simulate failure
-            if fail_after is not None and i >= fail_after:
-                raise RuntimeError("Simulated failure")
 
             # Update progress
             conn.execute(
