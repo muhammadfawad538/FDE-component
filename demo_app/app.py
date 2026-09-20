@@ -42,7 +42,8 @@ def init_db() -> None:
             completed_at TEXT,
             source_config TEXT,
             created_via TEXT DEFAULT 'Manual',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            retry_count INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS sync_job_checkpoint (
