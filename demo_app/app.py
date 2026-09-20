@@ -172,30 +172,30 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
                 )
                 conn.commit()
 
-        # Final checkpoint
+        # Final checkpoint + save final processed count
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
             (job_name, total, processed),
         )
         conn.execute(
-            "UPDATE sync_job SET status = 'Completed', completed_at = ? WHERE name = ?",
-            (datetime.now().isoformat(), job_name),
+            "UPDATE sync_job SET status = 'Completed', completed_at = ?, processed = ? WHERE name = ?",
+            (datetime.now().isoformat(), processed, job_name),
         )
         conn.commit()
         return JobResult("Completed", processed, 1, duplicate_count)
 
     except RuntimeError as e:
-        # Move failed items to DLQ
+        # Save checkpoint at failure point, then mark Interrupted
         conn.execute(
-            "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 1)",
-            (job_name, json.dumps({"id": record_id}), str(e)),
+            "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
+            (job_name, i, processed),
         )
         conn.execute(
-            "UPDATE sync_job SET status = 'Dead Lettered', error_summary = ? WHERE name = ?",
+            "UPDATE sync_job SET status = 'Interrupted', error_summary = ? WHERE name = ?",
             (str(e), job_name),
         )
         conn.commit()
-        return JobResult("Dead Lettered", processed, 1, duplicate_count)
+        return JobResult("Interrupted", processed, 1, duplicate_count)
     finally:
         conn.close()
 
@@ -218,18 +218,18 @@ def resume_job(job_name: str) -> JobResult:
 
 
 def redrive_from_dlq(job_name: str) -> JobResult:
+    """Re-drive an Interrupted job (resets and reruns from last checkpoint)."""
     conn = get_conn()
     job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
     if not job:
         raise ValueError(f"Job {job_name} not found")
 
-    # Reset
+    # Reset state but keep checkpoints so it resumes from last point
     conn.execute(
-        "UPDATE sync_job SET status = 'Queued', processed = 0, error_summary = NULL WHERE name = ?",
-        (job_name,),
+        "UPDATE sync_job SET status = 'Running', processed = ?, error_summary = NULL WHERE name = ?",
+        (job["processed"], job_name),
     )
     conn.execute("DELETE FROM sync_job_dlq WHERE parent = ?", (job_name,))
-    conn.execute("DELETE FROM sync_job_checkpoint WHERE parent = ?", (job_name,))
     conn.commit()
     conn.close()
     return run_job(job_name)
@@ -376,13 +376,13 @@ def show_job_detail() -> None:
     col1, col2 = st.columns(2)
 
     if job["status"] == "Interrupted":
-        if col1.button("Resume Job"):
-            with st.spinner("Resuming..."):
+        if col1.button("Resume Job", type="primary"):
+            with st.spinner("Resuming from last checkpoint..."):
                 result = resume_job(job_name)
             st.success(f"Resumed! Status: {result.status}, Processed: {result.processed}")
             st.rerun()
 
-    if job["status"] == "Dead Lettered":
+    if job["status"] in ("Interrupted", "Dead Lettered"):
         if col2.button("Re-drive from DLQ"):
             with st.spinner("Re-driving..."):
                 result = redrive_from_dlq(job_name)
