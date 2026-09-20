@@ -13,6 +13,8 @@ from pathlib import Path
 
 import streamlit as st
 
+from customers import CUSTOMERS
+
 DB_PATH = Path("demo.db")
 
 
@@ -119,6 +121,7 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
     processed = job["processed"]
     checkpoint_every = 3  # small for demo
     duplicate_count = 0
+    use_real_data = job["job_type"] == "customer.import"
 
     conn.execute(
         "UPDATE sync_job SET status = 'Running', started_at = ? WHERE name = ?",
@@ -128,8 +131,13 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
 
     try:
         for i in range(processed, total):
-            record_id = f"record-{i}"
-            payload = f"payload-{i}"
+            if use_real_data:
+                customer = CUSTOMERS[i]
+                record_id = customer["id"]
+                payload = json.dumps(customer)
+            else:
+                record_id = f"record-{i}"
+                payload = f"payload-{i}"
             key = IdempotencyKey(job["job_type"], record_id, payload)
 
             # Dedup check — scoped to THIS job so each demo run is independent
@@ -308,9 +316,10 @@ def show_create_job() -> None:
 
     col1, col2 = st.columns(2)
     with col1:
-        job_type = st.selectbox("Job Type", ["demo.import", "mail.sync", "api.pull"])
-        total = st.number_input("Total Records", min_value=1, max_value=1000, value=20)
-        fail_after = st.number_input("Fail After Record (optional)", min_value=-1, max_value=1000, value=-1)
+        job_type = st.selectbox("Job Type", ["customer.import", "demo.import"])
+        max_total = len(CUSTOMERS) if job_type == "customer.import" else 1000
+        total = st.number_input("Total Records", min_value=1, max_value=max_total, value=min(20, max_total))
+        fail_after = st.number_input("Fail After Record (optional)", min_value=-1, max_value=max_total, value=-1)
 
     with col2:
         source_config = st.text_area("Source Config (JSON)", value='{"source": "demo"}')
