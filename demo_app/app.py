@@ -67,8 +67,7 @@ def init_db() -> None:
             idempotency_key TEXT NOT NULL,
             source_id TEXT,
             sync_job_id TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(job_type, idempotency_key)
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
     conn.commit()
@@ -133,7 +132,7 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
             payload = f"payload-{i}"
             key = IdempotencyKey(job["job_type"], record_id, payload)
 
-            # Dedup check — scoped to THIS job so different runs don't block each other
+            # Dedup check — scoped to THIS job so each demo run is independent
             existing = conn.execute(
                 "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
                 (job["job_type"], key.hex, job_name),
@@ -142,15 +141,19 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
                 duplicate_count += 1
                 continue
 
-            # Mark as processed
-            try:
-                conn.execute(
-                    "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
-                    (job["job_type"], key.hex, record_id, job_name),
-                )
-            except sqlite3.IntegrityError:
+            # Mark as processed (only if not already marked for this job)
+            already = conn.execute(
+                "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
+                (job["job_type"], key.hex, job_name),
+            ).fetchone()
+            if already:
                 duplicate_count += 1
                 continue
+
+            conn.execute(
+                "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
+                (job["job_type"], key.hex, record_id, job_name),
+            )
 
             # Simulate failure
             if fail_after is not None and i >= fail_after:
