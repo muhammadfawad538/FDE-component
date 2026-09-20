@@ -261,11 +261,17 @@ def main() -> None:
 
 def show_dashboard() -> None:
     conn = get_conn()
-    jobs = conn.execute("SELECT * FROM sync_job ORDER BY name DESC").fetchall()
+    jobs = conn.execute("SELECT * FROM sync_job ORDER BY name ASC").fetchall()
     conn.close()
 
     if not jobs:
         st.info("No jobs yet. Create one from the 'Create Job' page.")
+
+    if st.button("Reset All Data"):
+        DB_PATH.unlink(missing_ok=True)
+        init_db()
+        st.success("Database reset!")
+        st.rerun()
         return
 
     # Stats
