@@ -155,9 +155,8 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
                 duplicate_count += 1
                 continue
 
-            # Simulate failure
-            if fail_after is not None and i >= fail_after:
-                # Save failed record to DLQ, but DON'T mark as processed
+            # Simulate failure at specific record - save to DLQ and stop job
+            if fail_after is not None and i == fail_after:
                 conn.execute(
                     "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
                     (job_name, payload, "Simulated failure"),
@@ -167,7 +166,7 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
                     (job_name,),
                 )
                 conn.commit()
-                continue  # skip this record, don't count it
+                raise RuntimeError("Simulated failure")
 
             # Mark as processed (only after successful processing)
             already = conn.execute(
