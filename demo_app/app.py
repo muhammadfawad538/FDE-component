@@ -188,14 +188,14 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
         return JobResult("Completed", processed, 1, duplicate_count)
 
     except RuntimeError as e:
-        # Save checkpoint at failure point, then mark Interrupted
+        # Save checkpoint at failure point and persist processed count
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
             (job_name, i, processed),
         )
         conn.execute(
-            "UPDATE sync_job SET status = 'Interrupted', error_summary = ? WHERE name = ?",
-            (str(e), job_name),
+            "UPDATE sync_job SET status = 'Interrupted', error_summary = ?, processed = ? WHERE name = ?",
+            (str(e), processed, job_name),
         )
         conn.commit()
         return JobResult("Interrupted", processed, 1, duplicate_count)
