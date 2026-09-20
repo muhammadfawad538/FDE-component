@@ -235,16 +235,32 @@ def resume_job(job_name: str) -> JobResult:
 
 
 def redrive_from_dlq(job_name: str) -> JobResult:
-    """Re-drive an Interrupted job (resets and reruns from last checkpoint)."""
+    """Re-drive an Interrupted job. After 2 retries, move it to Dead Lettered."""
     conn = get_conn()
     job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
     if not job:
         raise ValueError(f"Job {job_name} not found")
 
-    # Reset state but keep checkpoints so it resumes from last point
+    retry_count = (job["retry_count"] or 0) + 1
+    max_retries = 2
+
+    if retry_count >= max_retries:
+        conn.execute(
+            "UPDATE sync_job SET status = 'Dead Lettered', retry_count = ? WHERE name = ?",
+            (retry_count, job_name),
+        )
+        conn.execute(
+            "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, ?)",
+            (job_name, json.dumps({"id": "manual-retry"}), "Exhausted retries", retry_count),
+        )
+        conn.commit()
+        conn.close()
+        return JobResult("Dead Lettered", job["processed"], 1, 0)
+
+    # Retry: reset to Running and resume from last checkpoint
     conn.execute(
-        "UPDATE sync_job SET status = 'Running', processed = ?, error_summary = NULL WHERE name = ?",
-        (job["processed"], job_name),
+        "UPDATE sync_job SET status = 'Running', retry_count = ?, error_summary = NULL WHERE name = ?",
+        (retry_count, job_name),
     )
     conn.execute("DELETE FROM sync_job_dlq WHERE parent = ?", (job_name,))
     conn.commit()
