@@ -162,11 +162,11 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
                 else:
                     st.write(f"⚠️ **Duplicate detected:** {record_name} — skipping")
 
-                # Dedup check
+                # Dedup check - GLOBAL across all jobs (not per-job)
                 key = IdempotencyKey(job["job_type"], record_id, payload)
                 existing = conn.execute(
-                    "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
-                    (job["job_type"], key.hex, job_name),
+                    "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ?",
+                    (job["job_type"], key.hex),
                 ).fetchone()
                 if existing:
                     duplicate_count += 1
