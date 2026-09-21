@@ -15,7 +15,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from customers import CUSTOMERS_B
+from customers import CUSTOMERS_SOURCE_B as CUSTOMERS_B
 
 DB_PATH = Path("demo.db")
 
