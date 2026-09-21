@@ -19,16 +19,15 @@ USER frappe
 # Copy app code into bench apps directory
 COPY fde_component/ /home/frappe/frappe-bench/apps/fde_component/
 
-# Install app and set up test site
+# Set up test site and install app
+# Note: app is already copied, so no need for `bench get-app`
 RUN bench setup requirements && \
-    bench get-app fde_component && \
     bench new-site test.localhost \
         --mariadb-root-password root \
         --admin-password admin \
         --no-mq && \
     bench --site test.localhost install-app fde_component && \
     bench --site test.localhost migrate && \
-    bench build && \
     bench clear-cache
 
 # Run M2 tests
