@@ -245,7 +245,7 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
 
 def resume_job(job_name: str) -> JobResult:
     conn = get_conn()
-    job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,).fetchone()
+    job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
     if not job:
         raise ValueError(f"Job {job_name} not found")
     if job["status"] != "Interrupted":
