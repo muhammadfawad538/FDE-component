@@ -3,7 +3,9 @@ SP-05 Demo — Streamlit-based lightweight demo
 Run: streamlit run app.py
 """
 
+import csv
 import hashlib
+import io
 import json
 import sqlite3
 import time
@@ -13,12 +15,9 @@ from pathlib import Path
 
 import streamlit as st
 
-from customers import CUSTOMERS_SOURCE_B as CUSTOMERS_B
+from customers import CUSTOMERS_B
 
 DB_PATH = Path("demo.db")
-
-
-# ── Database ──────────────────────────────────────────────────────────────────
 
 
 def get_conn() -> sqlite3.Connection:
@@ -77,9 +76,6 @@ def init_db() -> None:
     conn.close()
 
 
-# ── Idempotency ───────────────────────────────────────────────────────────────
-
-
 class IdempotencyKey:
     def __init__(self, job_type: str, source_id: str, content: str = "") -> None:
         raw = f"{job_type}\x00{source_id}\x00{content}"
@@ -87,9 +83,6 @@ class IdempotencyKey:
 
     def __repr__(self) -> str:
         return f"IdempotencyKey({self.hex[:16]}...)"
-
-
-# ── Job Engine ────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -112,102 +105,78 @@ def create_job(job_type: str, total: int, source_config: dict) -> str:
     return name
 
 
-def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bool = False) -> JobResult:
-    """
-    Run a job with visible real-time processing.
-
-    Args:
-        job_name: The job to run
-        fail_after: If set, fail at this record index (0-based)
-        include_duplicates: If True, process all records twice to show dedup
-    """
+def run_job(job_name: str, fail_after: int | None = None, records: list | None = None) -> JobResult:
     conn = get_conn()
     job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
     if not job:
         raise ValueError(f"Job {job_name} not found")
 
-    total = job["total_records"]
+    if records is None:
+        records = CUSTOMERS_B[: job["total_records"]]
+
+    total = len(records)
     checkpoint_every = 3
     duplicate_count = 0
-    use_real_data = job["job_type"] == "customer.import"
 
     conn.execute(
-        "UPDATE sync_job SET status = 'Running', started_at = ? WHERE name = ?",
-        (datetime.now().isoformat(), job_name),
+        "UPDATE sync_job SET status = 'Running', started_at = ?, total_records = ? WHERE name = ?",
+        (datetime.now().isoformat(), total, job_name),
     )
     conn.commit()
 
     try:
-        # If duplicate mode, run twice to show dedup
-        passes = 2 if include_duplicates else 1
+        for i in range(total):
+            record = records[i]
+            record_id = record.get("id", f"record-{i}")
+            payload = json.dumps(record)
+            record_name = f"{record.get('name', record_id)} ({record_id})"
 
-        for pass_num in range(passes):
-            processed_in_pass = 0
+            st.write(f"🔄 **Processing:** {record_name}")
 
-            for i in range(total):
-                # Get record data from the realistic data source
-                if use_real_data:
-                    customer = CUSTOMERS_B[i]
-                    record_id = customer["id"]
-                    payload = json.dumps(customer)
-                    record_name = f"{customer['name']} ({customer['id']})"
-                else:
-                    record_id = f"record-{i}"
-                    payload = f"payload-{i}"
-                    record_name = record_id
+            key = IdempotencyKey(job["job_type"], record_id, payload)
+            existing = conn.execute(
+                "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ?",
+                (job["job_type"], key.hex),
+            ).fetchone()
+            if existing:
+                st.write(f"⚠️ **DUPLICATE DETECTED:** {record_name} — already processed, skipping")
+                duplicate_count += 1
+                continue
 
-                # Show what we're processing
-                st.write(f"🔄 **Processing:** {record_name}")
+            conn.execute(
+                "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
+                (job["job_type"], key.hex, record_id, job_name),
+            )
 
-                # Global dedup check — catches duplicates from ANY previous job
-                key = IdempotencyKey(job["job_type"], record_id, payload)
-                existing = conn.execute(
-                    "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ?",
-                    (job["job_type"], key.hex),
-                ).fetchone()
-                if existing:
-                    st.write(f"⚠️ **DUPLICATE DETECTED:** {record_name} — already processed, skipping")
-                    duplicate_count += 1
-                    continue
-
-                # Mark as processed
+            if fail_after is not None and i == fail_after:
                 conn.execute(
-                    "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
-                    (job["job_type"], key.hex, record_id, job_name),
+                    "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
+                    (job_name, payload, "Simulated failure"),
                 )
-
-                # Simulate failure at specific record
-                if fail_after is not None and i == fail_after:
-                    conn.execute(
-                        "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
-                        (job_name, payload, "Simulated failure"),
-                    )
-                    conn.execute(
-                        "UPDATE sync_job SET failed_count = failed_count + 1 WHERE name = ?",
-                        (job_name,),
-                    )
-                    conn.commit()
-                    st.write(f"❌ **FAILED:** {record_name} — moved to DLQ")
-                    raise RuntimeError("Simulated failure")
-
-                processed = i + 1 - duplicate_count
                 conn.execute(
-                    "UPDATE sync_job SET processed = ? WHERE name = ?",
-                    (processed, job_name),
+                    "UPDATE sync_job SET failed_count = failed_count + 1 WHERE name = ?",
+                    (job_name,),
                 )
-
-                # Checkpoint
-                if (i + 1) % checkpoint_every == 0:
-                    conn.execute(
-                        "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-                        (job_name, i + 1, processed),
-                    )
-                    st.write(f"💾 **Checkpoint saved:** offset={i + 1}, processed={processed}")
-
                 conn.commit()
-                time.sleep(0.3)
+                st.write(f"❌ **FAILED:** {record_name} — moved to DLQ")
+                raise RuntimeError("Simulated failure")
 
-        # Final checkpoint
+            processed = i + 1 - duplicate_count
+            conn.execute(
+                "UPDATE sync_job SET processed = ? WHERE name = ?",
+                (processed, job_name),
+            )
+
+            if (i + 1) % checkpoint_every == 0:
+                conn.execute(
+                    "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
+                    (job_name, i + 1, processed),
+                )
+                st.write(f"💾 **Checkpoint saved:** offset={i + 1}, processed={processed}")
+
+            conn.commit()
+            time.sleep(0.3)
+
         processed = total - duplicate_count
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
@@ -222,7 +191,6 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
         return JobResult("Completed", processed, 1, duplicate_count)
 
     except RuntimeError as e:
-        # Save checkpoint at failure point
         processed = i - duplicate_count
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
@@ -288,9 +256,6 @@ def redrive_from_dlq(job_name: str) -> JobResult:
     return run_job(job_name)
 
 
-# ── Streamlit UI ──────────────────────────────────────────────────────────────
-
-
 def main() -> None:
     st.set_page_config(page_title="SP-05 Demo", layout="wide")
     init_db()
@@ -332,7 +297,6 @@ def show_dashboard() -> None:
         st.info("No jobs yet. Create one from the 'Create Job' page.")
         return
 
-    # Stats
     total = len(jobs)
     completed = sum(1 for j in jobs if j["status"] == "Completed")
     failed = sum(1 for j in jobs if j["status"] in ("Failed", "Dead Lettered"))
@@ -344,7 +308,6 @@ def show_dashboard() -> None:
     col3.metric("Failed / DLQ", failed)
     col4.metric("Interrupted", interrupted)
 
-    # Job list
     st.subheader("Jobs")
     for job in jobs:
         with st.expander(f"{job['name']} — {job['status']}"):
@@ -371,26 +334,29 @@ def show_create_job() -> None:
 
     with col2:
         source_config = st.text_area("Source Config (JSON)", value='{"source": "demo"}')
+        uploaded_file = st.file_uploader("Upload CSV (optional)", type=["csv"],
+                                         help="Upload a CSV file with customer data. Must have 'id', 'name', 'email', 'phone', 'company' columns.")
+
+    # Show data source preview
+    st.subheader("Data Source")
+    if uploaded_file is not None:
+        csv_data = list(csv.DictReader(io.StringIO(uploaded_file.getvalue().decode("utf-8"))))
+        st.write(f"Loaded **{len(csv_data)} records** from uploaded CSV")
+        with st.expander("Preview data"):
+            st.table(csv_data[:10])
+    else:
+        st.write(f"Using **{len(CUSTOMERS_B)} built-in demo records** (includes duplicates)")
+        with st.expander("Preview data"):
+            preview = CUSTOMERS_B[:int(total)]
+            st.table([{**c, "content": json.dumps(c)} for c in preview])
 
     if st.button("Create & Run Job", type="primary"):
         job_name = create_job(job_type, int(total), json.loads(source_config))
         st.success(f"Job created: {job_name}")
 
-        # Show data source
-        st.subheader("Data Source")
-        if job_type == "customer.import":
-            st.write(f"Loading **{total} customer records** from source...")
-            with st.expander("Preview data"):
-                preview = CUSTOMERS_B[:int(total)]
-                st.table([{**c, "content": json.dumps(c)} for c in preview])
-        else:
-            st.write(f"Generating **{total} test records**...")
-
-        # Run job with visible output
         st.subheader("Processing")
         result = run_job(job_name, fail_after if fail_after >= 0 else None)
 
-        # Final summary
         st.subheader("Summary")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Status", result.status)
