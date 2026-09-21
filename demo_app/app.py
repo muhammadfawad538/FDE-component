@@ -112,20 +112,22 @@ def create_job(job_type: str, total: int, source_config: dict) -> str:
     return name
 
 
-def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
+def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bool = False) -> JobResult:
+    """
+    Run a job with visible real-time processing.
+
+    Args:
+        job_name: The job to run
+        fail_after: If set, fail at this record index (0-based)
+        include_duplicates: If True, process all records twice to show dedup
+    """
     conn = get_conn()
     job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
     if not job:
         raise ValueError(f"Job {job_name} not found")
 
     total = job["total_records"]
-    # Use last checkpoint's offset for resume start position
-    last_cp = conn.execute(
-        "SELECT offset FROM sync_job_checkpoint WHERE parent = ? ORDER BY id DESC LIMIT 1",
-        (job_name,),
-    ).fetchone()
-    processed = last_cp["offset"] if last_cp else job["processed"]
-    checkpoint_every = 3  # small for demo
+    checkpoint_every = 3
     duplicate_count = 0
     use_real_data = job["job_type"] == "customer.import"
 
@@ -136,100 +138,114 @@ def run_job(job_name: str, fail_after: int | None = None) -> JobResult:
     conn.commit()
 
     try:
-        for i in range(processed, total):
-            if use_real_data:
-                customer = CUSTOMERS[i]
-                record_id = customer["id"]
-                payload = json.dumps(customer)
-            else:
-                record_id = f"record-{i}"
-                payload = f"payload-{i}"
-            key = IdempotencyKey(job["job_type"], record_id, payload)
+        # If duplicate mode, run twice to show dedup
+        passes = 2 if include_duplicates else 1
 
-            # Dedup check — scoped to THIS job so each demo run is independent
-            existing = conn.execute(
-                "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
-                (job["job_type"], key.hex, job_name),
-            ).fetchone()
-            if existing:
-                duplicate_count += 1
-                continue
+        for pass_num in range(passes):
+            processed_in_pass = 0
 
-            # Simulate failure at specific record - save to DLQ and stop job
-            if fail_after is not None and i == fail_after:
+            for i in range(total):
+                # Get record data
+                if use_real_data:
+                    customer = CUSTOMERS[i]
+                    record_id = customer["id"]
+                    payload = json.dumps(customer)
+                    record_name = f"{customer['name']} ({customer['id']})"
+                else:
+                    record_id = f"record-{i}"
+                    payload = f"payload-{i}"
+                    record_name = record_id
+
+                # Show what we're processing
+                if pass_num == 0:
+                    st.write(f"🔄 **Processing:** {record_name}")
+                else:
+                    st.write(f"⚠️ **Duplicate detected:** {record_name} — skipping")
+
+                # Dedup check
+                key = IdempotencyKey(job["job_type"], record_id, payload)
+                existing = conn.execute(
+                    "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
+                    (job["job_type"], key.hex, job_name),
+                ).fetchone()
+                if existing:
+                    duplicate_count += 1
+                    if pass_num == 1:
+                        st.write(f"   ✓ Already processed — skipped")
+                    continue
+
+                # Mark as processed
                 conn.execute(
-                    "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
-                    (job_name, payload, "Simulated failure"),
+                    "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
+                    (job["job_type"], key.hex, record_id, job_name),
                 )
+
+                # Simulate failure at specific record
+                if fail_after is not None and i == fail_after and pass_num == 0:
+                    conn.execute(
+                        "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
+                        (job_name, payload, "Simulated failure"),
+                    )
+                    conn.execute(
+                        "UPDATE sync_job SET failed_count = failed_count + 1 WHERE name = ?",
+                        (job_name,),
+                    )
+                    conn.commit()
+                    st.write(f"❌ **FAILED:** {record_name} — moved to DLQ")
+                    raise RuntimeError("Simulated failure")
+
+                processed_in_pass += 1
+
+                # Update progress
                 conn.execute(
-                    "UPDATE sync_job SET failed_count = failed_count + 1 WHERE name = ?",
-                    (job_name,),
+                    "UPDATE sync_job SET processed = ? WHERE name = ?",
+                    (processed_in_pass, job_name),
                 )
+
+                # Checkpoint
+                if (i + 1) % checkpoint_every == 0:
+                    conn.execute(
+                        "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
+                        (job_name, i + 1, processed_in_pass),
+                    )
+                    st.write(f"💾 **Checkpoint saved:** offset={i + 1}, processed={processed_in_pass}")
+
                 conn.commit()
-                raise RuntimeError("Simulated failure")
+                time.sleep(0.2)
 
-            # Mark as processed (only after successful processing)
-            already = conn.execute(
-                "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
-                (job["job_type"], key.hex, job_name),
-            ).fetchone()
-            if already:
-                duplicate_count += 1
-                continue
-
-            conn.execute(
-                "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
-                (job["job_type"], key.hex, record_id, job_name),
-            )
-
-            # Count this record as processed
-            processed += 1
-
-            # Update progress
-            conn.execute(
-                "UPDATE sync_job SET processed = ? WHERE name = ?",
-                (processed, job_name),
-            )
-
-            # Checkpoint
-            if (i + 1) % checkpoint_every == 0:
-                conn.execute(
-                    "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-                    (job_name, i + 1, processed),
-                )
-                conn.commit()
-
-        # Final checkpoint + save final processed count
+        # Final checkpoint
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-            (job_name, total, processed),
+            (job_name, total, processed_in_pass),
         )
         conn.execute(
             "UPDATE sync_job SET status = 'Completed', completed_at = ?, processed = ? WHERE name = ?",
-            (datetime.now().isoformat(), processed, job_name),
+            (datetime.now().isoformat(), processed_in_pass, job_name),
         )
         conn.commit()
-        return JobResult("Completed", processed, len(set(range(processed - duplicate_count, processed))), duplicate_count)
+        st.write(f"✅ **Job completed:** {processed_in_pass}/{total} records processed")
+        return JobResult("Completed", processed_in_pass, 1, duplicate_count)
 
     except RuntimeError as e:
-        # Save checkpoint at failure point and persist processed count
+        # Save checkpoint at failure point
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-            (job_name, i, processed),
+            (job_name, i, processed_in_pass),
         )
         conn.execute(
             "UPDATE sync_job SET status = 'Interrupted', error_summary = ?, processed = ? WHERE name = ?",
-            (str(e), processed, job_name),
+            (str(e), processed_in_pass, job_name),
         )
         conn.commit()
-        return JobResult("Interrupted", processed, 1, duplicate_count)
+        st.write(f"⏸️ **Job interrupted:** {processed_in_pass}/{total} records processed")
+        return JobResult("Interrupted", processed_in_pass, 1, duplicate_count)
     finally:
         conn.close()
 
 
 def resume_job(job_name: str) -> JobResult:
     conn = get_conn()
-    job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
+    job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,).fetchone()
     if not job:
         raise ValueError(f"Job {job_name} not found")
     if job["status"] != "Interrupted":
@@ -245,7 +261,6 @@ def resume_job(job_name: str) -> JobResult:
 
 
 def redrive_from_dlq(job_name: str) -> JobResult:
-    """Re-drive an Interrupted job. After 2 retries, move it to Dead Lettered."""
     conn = get_conn()
     job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
     if not job:
@@ -267,7 +282,6 @@ def redrive_from_dlq(job_name: str) -> JobResult:
         conn.close()
         return JobResult("Dead Lettered", job["processed"], 1, 0)
 
-    # Retry: reset to Running and resume from last checkpoint
     conn.execute(
         "UPDATE sync_job SET status = 'Running', retry_count = ?, error_summary = NULL WHERE name = ?",
         (retry_count, job_name),
@@ -286,9 +300,9 @@ def main() -> None:
     init_db()
 
     st.title("SP-05: Resumable Ingestion & Job Orchestration — Demo")
-    st.markdown("Lightweight prototype with SQLite + Streamlit")
+    st.markdown("**Lightweight prototype with SQLite + Streamlit**")
 
-    page = st.sidebar.radio("Navigate", ["Dashboard", "Create Job", "Job Detail", "DLQ", "Dedup Log"])
+    page = st.sidebar.radio("Navigate", ["Dashboard", "Create Job", "Job Detail", "DLQ", "Dedup Log", "How It Works"])
 
     if page == "Dashboard":
         show_dashboard()
@@ -300,21 +314,26 @@ def main() -> None:
         show_dlq()
     elif page == "Dedup Log":
         show_dedup_log()
+    elif page == "How It Works":
+        show_how_it_works()
 
 
 def show_dashboard() -> None:
-    conn = get_conn()
-    jobs = conn.execute("SELECT * FROM sync_job ORDER BY name ASC").fetchall()
-    conn.close()
-
-    if not jobs:
-        st.info("No jobs yet. Create one from the 'Create Job' page.")
+    st.header("Dashboard")
 
     if st.button("Reset All Data"):
         DB_PATH.unlink(missing_ok=True)
         init_db()
         st.success("Database reset!")
         st.rerun()
+        return
+
+    conn = get_conn()
+    jobs = conn.execute("SELECT * FROM sync_job ORDER BY name DESC").fetchall()
+    conn.close()
+
+    if not jobs:
+        st.info("No jobs yet. Create one from the 'Create Job' page.")
         return
 
     # Stats
@@ -344,15 +363,17 @@ def show_dashboard() -> None:
 
 
 def show_create_job() -> None:
-    st.subheader("Create New SyncJob")
+    st.header("Create New SyncJob")
 
     col1, col2 = st.columns(2)
     with col1:
         job_type = st.selectbox("Job Type", ["customer.import", "demo.import"])
         max_total = len(CUSTOMERS) if job_type == "customer.import" else 1000
         total = st.number_input("Total Records", min_value=1, max_value=max_total, value=min(20, max_total))
-        fail_after = st.number_input("Fail After Record (optional)", min_value=-1, max_value=max_total, value=-1)
-        show_duplicates = st.checkbox("Include duplicate records in data", value=False, help="Shows dedup in action")
+        fail_after = st.number_input("Fail After Record (optional)", min_value=-1, max_value=max_total, value=-1,
+                                      help="Simulate failure at this record index (0-based)")
+        show_duplicates = st.checkbox("Include duplicate records in data", value=False,
+                                       help="Processes all records twice to show dedup in action")
 
     with col2:
         source_config = st.text_area("Source Config (JSON)", value='{"source": "demo"}')
@@ -361,133 +382,32 @@ def show_create_job() -> None:
         job_name = create_job(job_type, int(total), json.loads(source_config))
         st.success(f"Job created: {job_name}")
 
-        # Run job with live progress updates
-        progress_bar = st.progress(0, text="Starting job...")
-        status_text = st.empty()
-        checkpoint_text = st.empty()
-        record_text = st.empty()
-
-        conn = get_conn()
-        job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
-        total_records = job["total_records"]
-
-        # Process records one by one with visible progress
-        processed = 0
-        checkpoints_written = 0
-        duplicates = 0
-        checkpoint_every = 3
-
-        # If duplicate mode, process all records twice to show dedup in action
-        passes = 2 if show_duplicates else 1
-
-        for pass_num in range(passes):
-            if show_duplicates:
-                record_text.write(f"**=== PASS {pass_num + 1} of {passes} ===**")
-
-            for i in range(total_records):
-                # Get current record
-                if job["job_type"] == "customer.import":
-                    customer = CUSTOMERS[i]
-                    record_id = customer["id"]
-                    payload = json.dumps(customer)
-                    record_name = f"{customer['name']} ({customer['id']})"
-                else:
-                    record_id = f"record-{i}"
-                    payload = f"payload-{i}"
-                    record_name = record_id
-
-                # Show current record being processed
-                record_text.write(f"**Processing:** {record_name}")
-
-                # Dedup check
-                key = IdempotencyKey(job["job_type"], record_id, payload)
-                existing = conn.execute(
-                    "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
-                    (job["job_type"], key.hex, job_name),
-                ).fetchone()
-                if existing:
-                    record_text.write(f"**DUPLICATE DETECTED:** {record_name} — skipped (already processed)")
-                    duplicates += 1
-                    continue
-
-                # Mark as processed
-                conn.execute(
-                    "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
-                    (job["job_type"], key.hex, record_id, job_name),
-                )
-
-            # Simulate failure
-            if fail_after is not None and i == fail_after:
-                conn.execute(
-                    "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
-                    (job_name, payload, "Simulated failure"),
-                )
-                conn.execute(
-                    "UPDATE sync_job SET status = 'Interrupted', error_summary = 'Simulated failure', failed_count = 1 WHERE name = ?",
-                    (job_name,),
-                )
-                conn.commit()
-                status_text.write(f"**Status:** Interrupted (failed at {record_name})")
-                break
-
-            processed += 1
-            conn.execute(
-                "UPDATE sync_job SET processed = ? WHERE name = ?",
-                (processed, job_name),
-            )
-
-            # Checkpoint
-            if (i + 1) % checkpoint_every == 0:
-                conn.execute(
-                    "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-                    (job_name, i + 1, processed),
-                )
-                checkpoints_written += 1
-                checkpoint_text.text(f"Checkpoint saved at record {i + 1} (processed: {processed})")
-
-            # Update progress
-            pct = min(processed / total_records, 1.0) if total_records > 0 else 0
-            progress_bar.progress(pct, text=f"Progress: {processed}/{total_records} ({int(pct*100)}%)")
-            status_text.write(f"**Status:** Running")
-
-            conn.commit()
-            time.sleep(0.3)  # Visible delay for demo
-
+        # Show data source
+        st.subheader("Data Source")
+        if job_type == "customer.import":
+            st.write(f"Loading **{total} customer records** from source...")
+            with st.expander("Preview data"):
+                preview = CUSTOMERS[:int(total)]
+                st.table([{**c, "content": json.dumps(c)} for c in preview])
         else:
-            # Completed successfully
-            conn.execute(
-                "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-                (job_name, total_records, processed),
-            )
-            conn.execute(
-                "UPDATE sync_job SET status = 'Completed', completed_at = ? WHERE name = ?",
-                (datetime.now().isoformat(), job_name),
-            )
-            conn.commit()
-            status_text.write(f"**Status:** Completed")
-            checkpoint_text.text(f"Final checkpoint: offset={total_records}, processed={processed}")
+            st.write(f"Generating **{total} test records**...")
 
-        conn.close()
+        # Run job with visible output
+        st.subheader("Processing")
+        result = run_job(job_name, fail_after if fail_after >= 0 else None, show_duplicates)
 
         # Final summary
-        final_job = get_conn().execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
-        get_conn().close()
-
-        st.write(f"**Final Status:** {final_job['status']}")
-        st.write(f"**Processed:** {final_job['processed']}/{final_job['total_records']}")
-        st.write(f"**Failed Count:** {final_job['failed_count']}")
-        st.write(f"**Checkpoints:** {checkpoints_written + 1}")
-        st.write(f"**Duplicates:** {duplicates}")
-
-        if final_job["status"] == "Completed":
-            st.success("Job completed successfully!")
-        elif final_job["status"] == "Interrupted":
-            st.warning("Job interrupted — click Resume to continue")
-        else:
-            st.error("Job dead lettered — check DLQ")
+        st.subheader("Summary")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Status", result.status)
+        col2.metric("Processed", result.processed)
+        col3.metric("Checkpoints", result.checkpoints)
+        col4.metric("Duplicates", result.duplicates)
 
 
 def show_job_detail() -> None:
+    st.header("Job Detail")
+
     conn = get_conn()
     jobs = conn.execute("SELECT name, job_type, status FROM sync_job ORDER BY name DESC").fetchall()
     conn.close()
@@ -528,7 +448,6 @@ def show_job_detail() -> None:
     else:
         st.info("No checkpoints yet.")
 
-    # Actions
     st.subheader("Actions")
     col1, col2 = st.columns(2)
 
@@ -548,15 +467,17 @@ def show_job_detail() -> None:
 
 
 def show_dlq() -> None:
+    st.header("Dead Letter Queue")
+
     conn = get_conn()
     dlq_items = conn.execute("SELECT * FROM sync_job_dlq ORDER BY id DESC").fetchall()
     conn.close()
 
     if not dlq_items:
-        st.info("DLQ is empty.")
+        st.info("DLQ is empty. No failed items.")
         return
 
-    st.subheader(f"Dead Letter Queue ({len(dlq_items)} items)")
+    st.subheader(f"Failed Items ({len(dlq_items)} total)")
     for item in dlq_items:
         with st.expander(f"Job: {item['parent']} — Error: {item['error'][:50]}"):
             st.write(f"**Item Payload:** {item['item_payload']}")
@@ -565,6 +486,8 @@ def show_dlq() -> None:
 
 
 def show_dedup_log() -> None:
+    st.header("Idempotency Log")
+
     conn = get_conn()
     dedup = conn.execute("SELECT * FROM sync_job_dedup ORDER BY created_at DESC LIMIT 100").fetchall()
     conn.close()
@@ -573,17 +496,68 @@ def show_dedup_log() -> None:
         st.info("No dedup entries yet.")
         return
 
-    st.subheader(f"Idempotency Log ({len(dedup)} entries)")
+    st.subheader(f"Processed Records ({len(dedup)} total)")
+    st.markdown("Each record gets a unique SHA-256 fingerprint. Duplicates are detected by matching fingerprints.")
+
     data = [
         {
             "Job Type": d["job_type"],
-            "Idempotency Key": d["idempotency_key"][:16] + "...",
+            "Fingerprint (SHA-256)": d["idempotency_key"][:32] + "...",
             "Source ID": d["source_id"],
             "Sync Job": d["sync_job_id"],
         }
         for d in dedup
     ]
     st.table(data)
+
+
+def show_how_it_works() -> None:
+    st.header("How It Works")
+
+    st.markdown("""
+    ## The Problem
+    Imagine importing 20,000 customer records from an old system to a new one.
+
+    **What can go wrong?**
+    - Computer crashes after 10,000 records → lose all progress
+    - Same customer imported twice → duplicates in database
+    - Some records fail → don't know which ones or why
+    - Need to retry every month → manual work
+
+    ## The Solution: SP-05
+
+    **1. Checkpoints** — Save points like a video game
+    - Every 3 records: save progress
+    - If crash: resume from last save point
+    - No rework, no lost progress
+
+    **2. Idempotency** — Fingerprint each record
+    - SHA-256 hash of (job type + customer ID + customer data)
+    - Before processing: check if fingerprint exists
+    - If yes: skip (already processed)
+    - Guarantees zero duplicates
+
+    **3. DLQ (Dead Letter Queue)** — Failed items basket
+    - If record fails: save to DLQ
+    - Job continues with other records
+    - Admin can review and re-drive later
+
+    **4. Resume** — Pick up where you left off
+    - Click Resume button
+    - Reads last checkpoint
+    - Continues from next record
+    - Zero duplicates on resume
+
+    ## Demo Flow
+
+    1. **Create Job:** Import 20 customers, fail at record 10
+    2. **Watch Processing:** See each customer being processed
+    3. **Checkpoint:** See save points being written
+    4. **Failure:** Record 10 fails, goes to DLQ
+    5. **Resume:** Click Resume, job continues from record 11
+    6. **DLQ:** View failed item
+    7. **Dedup Log:** See SHA-256 fingerprints
+    """)
 
 
 if __name__ == "__main__":
