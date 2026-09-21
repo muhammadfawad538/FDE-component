@@ -425,7 +425,7 @@ class CheckpointedJob:
     def _source_id(self, record: Any) -> str:
         """Extract a stable identifier from *record* for dedup keys."""
         if hasattr(record, "get"):
-            return str(record.get("name") or record.get("id") or hash(str(record)))
+            return str(record.get("name") or record.get("id") or hashlib.sha256(str(record).encode()).hexdigest()[:16])
         return str(record)
 
     def _content_hash(self, record: Any) -> str:

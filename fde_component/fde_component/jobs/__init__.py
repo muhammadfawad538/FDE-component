@@ -23,7 +23,7 @@ __all__ = [
     "retry_dlq",
     "JobInterrupted",
     "JobFailed",
-    "JobDeadLeted",
+    "JobDeadLettered",
     "DedupDuplicate",
     "IdempotencyKey",
     "check_dedup",
