@@ -352,6 +352,7 @@ def show_create_job() -> None:
         max_total = len(CUSTOMERS) if job_type == "customer.import" else 1000
         total = st.number_input("Total Records", min_value=1, max_value=max_total, value=min(20, max_total))
         fail_after = st.number_input("Fail After Record (optional)", min_value=-1, max_value=max_total, value=-1)
+        show_duplicates = st.checkbox("Include duplicate records in data", value=False, help="Shows dedup in action")
 
     with col2:
         source_config = st.text_area("Source Config (JSON)", value='{"source": "demo"}')
@@ -392,19 +393,48 @@ def show_create_job() -> None:
             record_text.write(f"**Processing:** {record_name}")
 
             # Dedup check
+            key = IdempotencyKey(job["job_type"], record_id, payload)
             existing = conn.execute(
                 "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
-                (job["job_type"], IdempotencyKey(job["job_type"], record_id, payload).hex, job_name),
+                (job["job_type"], key.hex, job_name),
             ).fetchone()
             if existing:
+                record_text.write(f"**DUPLICATE DETECTED:** {record_name} — skipped (already processed)")
                 duplicates += 1
                 continue
 
             # Mark as processed
             conn.execute(
                 "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
-                (job["job_type"], IdempotencyKey(job["job_type"], record_id, payload).hex, record_id, job_name),
+                (job["job_type"], key.hex, record_id, job_name),
             )
+
+            # Simulate duplicate records if checkbox is checked
+            if show_duplicates and i > 0 and i % 3 == 0:
+                # Insert a duplicate of a previous record
+                prev_customer = CUSTOMERS[i - 1]
+                dup_id = f"DUPLICATE-{i}"
+                dup_payload = json.dumps(prev_customer)
+                dup_key = IdempotencyKey(job["job_type"], prev_customer["id"], dup_payload)
+
+                # Check dedup for the duplicate
+                dup_existing = conn.execute(
+                    "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
+                    (job["job_type"], dup_key.hex, job_name),
+                ).fetchone()
+                if dup_existing:
+                    record_text.write(f"**DUPLICATE DETECTED:** {prev_customer['name']} ({prev_customer['id']}) — skipped (already processed)")
+                    duplicates += 1
+                    continue
+
+                # Mark duplicate as processed
+                conn.execute(
+                    "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
+                    (job["job_type"], dup_key.hex, dup_id, job_name),
+                )
+                record_text.write(f"**DUPLICATE DETECTED:** {prev_customer['name']} ({prev_customer['id']}) — skipped (already processed)")
+                duplicates += 1
+                continue
 
             # Simulate failure
             if fail_after is not None and i == fail_after:
