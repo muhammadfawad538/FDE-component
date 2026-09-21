@@ -13,7 +13,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from customers import CUSTOMERS_SOURCE_A, CUSTOMERS_SOURCE_B
+from customers import CUSTOMERS_SOURCE_B as CUSTOMERS_B
 
 DB_PATH = Path("demo.db")
 
@@ -147,7 +147,7 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
             for i in range(total):
                 # Get record data from the realistic data source
                 if use_real_data:
-                    customer = CUSTOMERS_SOURCE_B[i]
+                    customer = CUSTOMERS_B[i]
                     record_id = customer["id"]
                     payload = json.dumps(customer)
                     record_name = f"{customer['name']} ({customer['id']})"
@@ -364,7 +364,7 @@ def show_create_job() -> None:
     col1, col2 = st.columns(2)
     with col1:
         job_type = st.selectbox("Job Type", ["customer.import", "demo.import"])
-        max_total = len(CUSTOMERS_SOURCE_B) if job_type == "customer.import" else 1000
+        max_total = len(CUSTOMERS_B) if job_type == "customer.import" else 1000
         total = st.number_input("Total Records", min_value=1, max_value=max_total, value=min(20, max_total))
         fail_after = st.number_input("Fail After Record (optional)", min_value=-1, max_value=max_total, value=-1,
                                       help="Simulate failure at this record index (0-based)")
@@ -381,7 +381,7 @@ def show_create_job() -> None:
         if job_type == "customer.import":
             st.write(f"Loading **{total} customer records** from source...")
             with st.expander("Preview data"):
-                preview = CUSTOMERS_SOURCE_B[:int(total)]
+                preview = CUSTOMERS_B[:int(total)]
                 st.table([{**c, "content": json.dumps(c)} for c in preview])
         else:
             st.write(f"Generating **{total} test records**...")
