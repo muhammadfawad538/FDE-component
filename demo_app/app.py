@@ -360,64 +360,121 @@ def show_create_job() -> None:
         job_name = create_job(job_type, int(total), json.loads(source_config))
         st.success(f"Job created: {job_name}")
 
-        # Run job in background thread so UI stays responsive
-        import threading
-        result_holder = {}
-
-        def run_in_background():
-            result_holder["result"] = run_job(job_name, fail_after if fail_after >= 0 else None)
-
-        thread = threading.Thread(target=run_in_background, daemon=True)
-        thread.start()
-
-        # Live progress tracking
+        # Run job with live progress updates
         progress_bar = st.progress(0, text="Starting job...")
         status_text = st.empty()
         checkpoint_text = st.empty()
+        record_text = st.empty()
 
         conn = get_conn()
+        job = conn.execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
+        total_records = job["total_records"]
 
-        while thread.is_alive():
-            job_status = conn.execute("SELECT status, processed, total_records FROM sync_job WHERE name = ?", (job_name,)).fetchone()
-            if job_status:
-                current_status = job_status["status"]
-                current_processed = job_status["processed"]
-                current_total = job_status["total_records"]
-                pct = min(current_processed / current_total, 1.0) if current_total > 0 else 0
-                progress_bar.progress(pct, text=f"Progress: {current_processed}/{current_total} ({int(pct*100)}%)")
-                status_text.write(f"**Status:** {current_status}")
+        # Process records one by one with visible progress
+        processed = 0
+        checkpoints_written = 0
+        duplicates = 0
+        checkpoint_every = 3
 
-                # Show latest checkpoints
-                checkpoints = conn.execute(
-                    "SELECT offset, records_processed FROM sync_job_checkpoint WHERE parent = ? ORDER BY id DESC LIMIT 3",
-                    (job_name,)
-                ).fetchall()
-                if checkpoints:
-                    cp_str = "\n".join([f"  Checkpoint: offset={cp['offset']}, processed={cp['records_processed']}" for cp in checkpoints])
-                    checkpoint_text.text(f"Latest checkpoints:\n{cp_str}")
+        for i in range(total_records):
+            # Get current record
+            if job["job_type"] == "customer.import":
+                customer = CUSTOMERS[i]
+                record_id = customer["id"]
+                payload = json.dumps(customer)
+                record_name = f"{customer['name']} ({customer['id']})"
+            else:
+                record_id = f"record-{i}"
+                payload = f"payload-{i}"
+                record_name = record_id
 
-            time.sleep(0.5)
+            # Show current record being processed
+            record_text.write(f"**Processing:** {record_name}")
+
+            # Dedup check
+            existing = conn.execute(
+                "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ? AND sync_job_id = ?",
+                (job["job_type"], IdempotencyKey(job["job_type"], record_id, payload).hex, job_name),
+            ).fetchone()
+            if existing:
+                duplicates += 1
+                continue
+
+            # Mark as processed
+            conn.execute(
+                "INSERT INTO sync_job_dedup (job_type, idempotency_key, source_id, sync_job_id) VALUES (?, ?, ?, ?)",
+                (job["job_type"], IdempotencyKey(job["job_type"], record_id, payload).hex, record_id, job_name),
+            )
+
+            # Simulate failure
+            if fail_after is not None and i == fail_after:
+                conn.execute(
+                    "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
+                    (job_name, payload, "Simulated failure"),
+                )
+                conn.execute(
+                    "UPDATE sync_job SET status = 'Interrupted', error_summary = 'Simulated failure', failed_count = 1 WHERE name = ?",
+                    (job_name,),
+                )
+                conn.commit()
+                status_text.write(f"**Status:** Interrupted (failed at {record_name})")
+                break
+
+            processed += 1
+            conn.execute(
+                "UPDATE sync_job SET processed = ? WHERE name = ?",
+                (processed, job_name),
+            )
+
+            # Checkpoint
+            if (i + 1) % checkpoint_every == 0:
+                conn.execute(
+                    "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
+                    (job_name, i + 1, processed),
+                )
+                checkpoints_written += 1
+                checkpoint_text.text(f"Checkpoint saved at record {i + 1} (processed: {processed})")
+
+            # Update progress
+            pct = min(processed / total_records, 1.0) if total_records > 0 else 0
+            progress_bar.progress(pct, text=f"Progress: {processed}/{total_records} ({int(pct*100)}%)")
+            status_text.write(f"**Status:** Running")
+
+            conn.commit()
+            time.sleep(0.3)  # Visible delay for demo
+
+        else:
+            # Completed successfully
+            conn.execute(
+                "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
+                (job_name, total_records, processed),
+            )
+            conn.execute(
+                "UPDATE sync_job SET status = 'Completed', completed_at = ? WHERE name = ?",
+                (datetime.now().isoformat(), job_name),
+            )
+            conn.commit()
+            status_text.write(f"**Status:** Completed")
+            checkpoint_text.text(f"Final checkpoint: offset={total_records}, processed={processed}")
 
         conn.close()
-        thread.join()
 
-        # Final result
-        result = result_holder.get("result")
+        # Final summary
         final_job = get_conn().execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
         get_conn().close()
 
         st.write(f"**Final Status:** {final_job['status']}")
         st.write(f"**Processed:** {final_job['processed']}/{final_job['total_records']}")
         st.write(f"**Failed Count:** {final_job['failed_count']}")
-        st.write(f"**Checkpoints:** {result.checkpoints if result else 0}")
-        st.write(f"**Duplicates:** {result.duplicates if result else 0}")
+        st.write(f"**Checkpoints:** {checkpoints_written + 1}")
+        st.write(f"**Duplicates:** {duplicates}")
 
         if final_job["status"] == "Completed":
             st.success("Job completed successfully!")
-        elif final_job["status"] == "Dead Lettered":
-            st.error("Job dead lettered — check DLQ")
+        elif final_job["status"] == "Interrupted":
+            st.warning("Job interrupted — click Resume to continue")
         else:
-            st.warning(f"Job status: {final_job['status']}")
+            st.error("Job dead lettered — check DLQ")
 
 
 def show_job_detail() -> None:
