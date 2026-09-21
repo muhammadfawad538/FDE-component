@@ -13,7 +13,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from customers import CUSTOMERS
+from customers import CUSTOMERS_SOURCE_A, CUSTOMERS_SOURCE_B
 
 DB_PATH = Path("demo.db")
 
@@ -145,9 +145,9 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
             processed_in_pass = 0
 
             for i in range(total):
-                # Get record data
+                # Get record data from the realistic data source
                 if use_real_data:
-                    customer = CUSTOMERS[i]
+                    customer = CUSTOMERS_SOURCE_B[i]
                     record_id = customer["id"]
                     payload = json.dumps(customer)
                     record_name = f"{customer['name']} ({customer['id']})"
@@ -157,21 +157,17 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
                     record_name = record_id
 
                 # Show what we're processing
-                if pass_num == 0:
-                    st.write(f"🔄 **Processing:** {record_name}")
-                else:
-                    st.write(f"⚠️ **Duplicate detected:** {record_name} — skipping")
+                st.write(f"🔄 **Processing:** {record_name}")
 
-                # Dedup check - GLOBAL across all jobs (not per-job)
+                # Global dedup check — catches duplicates from ANY previous job
                 key = IdempotencyKey(job["job_type"], record_id, payload)
                 existing = conn.execute(
                     "SELECT id FROM sync_job_dedup WHERE job_type = ? AND idempotency_key = ?",
                     (job["job_type"], key.hex),
                 ).fetchone()
                 if existing:
+                    st.write(f"⚠️ **DUPLICATE DETECTED:** {record_name} — already processed, skipping")
                     duplicate_count += 1
-                    if pass_num == 1:
-                        st.write(f"   ✓ Already processed — skipped")
                     continue
 
                 # Mark as processed
@@ -181,7 +177,7 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
                 )
 
                 # Simulate failure at specific record
-                if fail_after is not None and i == fail_after and pass_num == 0:
+                if fail_after is not None and i == fail_after:
                     conn.execute(
                         "INSERT INTO sync_job_dlq (parent, item_payload, error, retry_count) VALUES (?, ?, ?, 0)",
                         (job_name, payload, "Simulated failure"),
@@ -194,51 +190,51 @@ def run_job(job_name: str, fail_after: int | None = None, include_duplicates: bo
                     st.write(f"❌ **FAILED:** {record_name} — moved to DLQ")
                     raise RuntimeError("Simulated failure")
 
-                processed_in_pass += 1
-
-                # Update progress
+                processed = i + 1 - duplicate_count
                 conn.execute(
                     "UPDATE sync_job SET processed = ? WHERE name = ?",
-                    (processed_in_pass, job_name),
+                    (processed, job_name),
                 )
 
                 # Checkpoint
                 if (i + 1) % checkpoint_every == 0:
                     conn.execute(
                         "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-                        (job_name, i + 1, processed_in_pass),
+                        (job_name, i + 1, processed),
                     )
-                    st.write(f"💾 **Checkpoint saved:** offset={i + 1}, processed={processed_in_pass}")
+                    st.write(f"💾 **Checkpoint saved:** offset={i + 1}, processed={processed}")
 
                 conn.commit()
-                time.sleep(0.2)
+                time.sleep(0.3)
 
         # Final checkpoint
+        processed = total - duplicate_count
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-            (job_name, total, processed_in_pass),
+            (job_name, total, processed),
         )
         conn.execute(
             "UPDATE sync_job SET status = 'Completed', completed_at = ?, processed = ? WHERE name = ?",
-            (datetime.now().isoformat(), processed_in_pass, job_name),
+            (datetime.now().isoformat(), processed, job_name),
         )
         conn.commit()
-        st.write(f"✅ **Job completed:** {processed_in_pass}/{total} records processed")
-        return JobResult("Completed", processed_in_pass, 1, duplicate_count)
+        st.write(f"✅ **Job completed:** {processed}/{total} records processed ({duplicate_count} duplicates skipped)")
+        return JobResult("Completed", processed, 1, duplicate_count)
 
     except RuntimeError as e:
         # Save checkpoint at failure point
+        processed = i - duplicate_count
         conn.execute(
             "INSERT INTO sync_job_checkpoint (parent, offset, records_processed) VALUES (?, ?, ?)",
-            (job_name, i, processed_in_pass),
+            (job_name, i, processed),
         )
         conn.execute(
             "UPDATE sync_job SET status = 'Interrupted', error_summary = ?, processed = ? WHERE name = ?",
-            (str(e), processed_in_pass, job_name),
+            (str(e), processed, job_name),
         )
         conn.commit()
-        st.write(f"⏸️ **Job interrupted:** {processed_in_pass}/{total} records processed")
-        return JobResult("Interrupted", processed_in_pass, 1, duplicate_count)
+        st.write(f"⏸️ **Job interrupted:** {processed}/{total} records processed")
+        return JobResult("Interrupted", processed, 1, duplicate_count)
     finally:
         conn.close()
 
@@ -368,12 +364,10 @@ def show_create_job() -> None:
     col1, col2 = st.columns(2)
     with col1:
         job_type = st.selectbox("Job Type", ["customer.import", "demo.import"])
-        max_total = len(CUSTOMERS) if job_type == "customer.import" else 1000
+        max_total = len(CUSTOMERS_SOURCE_B) if job_type == "customer.import" else 1000
         total = st.number_input("Total Records", min_value=1, max_value=max_total, value=min(20, max_total))
         fail_after = st.number_input("Fail After Record (optional)", min_value=-1, max_value=max_total, value=-1,
                                       help="Simulate failure at this record index (0-based)")
-        show_duplicates = st.checkbox("Include duplicate records in data", value=False,
-                                       help="Processes all records twice to show dedup in action")
 
     with col2:
         source_config = st.text_area("Source Config (JSON)", value='{"source": "demo"}')
@@ -387,14 +381,14 @@ def show_create_job() -> None:
         if job_type == "customer.import":
             st.write(f"Loading **{total} customer records** from source...")
             with st.expander("Preview data"):
-                preview = CUSTOMERS[:int(total)]
+                preview = CUSTOMERS_SOURCE_B[:int(total)]
                 st.table([{**c, "content": json.dumps(c)} for c in preview])
         else:
             st.write(f"Generating **{total} test records**...")
 
         # Run job with visible output
         st.subheader("Processing")
-        result = run_job(job_name, fail_after if fail_after >= 0 else None, show_duplicates)
+        result = run_job(job_name, fail_after if fail_after >= 0 else None)
 
         # Final summary
         st.subheader("Summary")
