@@ -1,0 +1,17 @@
+name: Notify Slack on Push
+
+on:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"📦 *${{ github.repository }}*\nPushed by *${{ github.actor }}* to \`${{ github.ref_name }}\`\n<${{ github.event.head_commit.url }}|${{ github.event.head_commit.message }}>\"}" \
+          "https://hooks.slack.com/services/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"
+
