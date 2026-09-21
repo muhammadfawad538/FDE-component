@@ -360,22 +360,31 @@ def show_create_job() -> None:
         job_name = create_job(job_type, int(total), json.loads(source_config))
         st.success(f"Job created: {job_name}")
 
+        # Run job in background thread so UI stays responsive
+        import threading
+        result_holder = {}
+
+        def run_in_background():
+            result_holder["result"] = run_job(job_name, fail_after if fail_after >= 0 else None)
+
+        thread = threading.Thread(target=run_in_background, daemon=True)
+        thread.start()
+
         # Live progress tracking
         progress_bar = st.progress(0, text="Starting job...")
         status_text = st.empty()
         checkpoint_text = st.empty()
 
         conn = get_conn()
-        last_checkpoint_count = 0
 
-        for i in range(int(total) + 1):
-            # Check job status every iteration
-            job_status = conn.execute("SELECT status, processed FROM sync_job WHERE name = ?", (job_name,)).fetchone()
+        while thread.is_alive():
+            job_status = conn.execute("SELECT status, processed, total_records FROM sync_job WHERE name = ?", (job_name,)).fetchone()
             if job_status:
                 current_status = job_status["status"]
                 current_processed = job_status["processed"]
-                pct = min(current_processed / int(total), 1.0) if int(total) > 0 else 0
-                progress_bar.progress(pct, text=f"Progress: {current_processed}/{int(total)} ({int(pct*100)}%)")
+                current_total = job_status["total_records"]
+                pct = min(current_processed / current_total, 1.0) if current_total > 0 else 0
+                progress_bar.progress(pct, text=f"Progress: {current_processed}/{current_total} ({int(pct*100)}%)")
                 status_text.write(f"**Status:** {current_status}")
 
                 # Show latest checkpoints
@@ -387,21 +396,21 @@ def show_create_job() -> None:
                     cp_str = "\n".join([f"  Checkpoint: offset={cp['offset']}, processed={cp['records_processed']}" for cp in checkpoints])
                     checkpoint_text.text(f"Latest checkpoints:\n{cp_str}")
 
-            # Stop if job is done
-            if job_status and job_status["status"] in ("Completed", "Dead Lettered", "Failed"):
-                break
-
             time.sleep(0.5)
 
         conn.close()
+        thread.join()
 
         # Final result
+        result = result_holder.get("result")
         final_job = get_conn().execute("SELECT * FROM sync_job WHERE name = ?", (job_name,)).fetchone()
         get_conn().close()
 
         st.write(f"**Final Status:** {final_job['status']}")
         st.write(f"**Processed:** {final_job['processed']}/{final_job['total_records']}")
         st.write(f"**Failed Count:** {final_job['failed_count']}")
+        st.write(f"**Checkpoints:** {result.checkpoints if result else 0}")
+        st.write(f"**Duplicates:** {result.duplicates if result else 0}")
 
         if final_job["status"] == "Completed":
             st.success("Job completed successfully!")
