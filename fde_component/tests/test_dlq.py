@@ -43,7 +43,7 @@ def failing_job_doc():
     frappe.db.commit()
     yield doc.name
     try:
-        frappe.db.delete("SyncJobDLQ", {"parent": doc.name})
+        frappe.db.delete("SyncJobDLQ", {"sync_job": doc.name})
         frappe.db.delete("SyncJobCheckpoint", {"parent": doc.name})
         frappe.db.delete("SyncJob", doc.name)
         frappe.db.commit()
@@ -65,5 +65,5 @@ class TestDLQ:
             job = FailingJob(job_name=failing_job_doc)
             job.run()
 
-        dlq_count = frappe.db.count("SyncJobDLQ", {"parent": failing_job_doc})
+        dlq_count = frappe.db.count("SyncJobDLQ", {"sync_job": failing_job_doc})
         assert dlq_count > 0

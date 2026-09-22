@@ -11,7 +11,7 @@ import hashlib
 
 import pytest
 
-from fde_component.jobs.idempotency import IdempotencyKey, _build_key
+from fde_component.jobs.idempotency import IdempotencyKey
 from fde_component.jobs.exceptions import DedupDuplicate
 
 

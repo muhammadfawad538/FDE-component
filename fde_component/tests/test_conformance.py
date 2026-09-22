@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from fde_component.jobs.base import CheckpointedJob
-from fde_component.jobs.idempotency import IdempotencyKey, mark_dedup, check_dedup, is_deduped
+from fde_component.jobs.idempotency import IdempotencyKey
 from fde_component.jobs.exceptions import JobInterrupted, JobFailed, JobDeadLettered, DedupDuplicate
 
 

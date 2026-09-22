@@ -102,6 +102,7 @@ def _enqueue_schedule(sched: dict, now: datetime) -> None:
     sync_job = frappe.new_doc("SyncJob")
     sync_job.job_type = sched["job_type"]
     sync_job.status = "Queued"
+    sync_job.created_via = "Scheduler"
     sync_job.source_config = sched.get("source_config", "{}")
     sync_job.total_records = source_config.get("total_records")
     sync_job.insert(ignore_permissions=True)

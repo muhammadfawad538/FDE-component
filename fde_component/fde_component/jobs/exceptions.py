@@ -10,8 +10,8 @@ Hierarchy
 JobError
 ├── JobInterrupted   — worker was stopped (SIGTERM/SIGINT); job is resumable
 ├── JobFailed        — permanent failure after all retries exhausted
-└── JobDeadLettered  — item moved to DLQ; raised after DLQ write so caller
-                       can bail out of the record loop cleanly
+├── JobDeadLettered  — item moved to DLQ; raised after DLQ write so caller
+│                      can bail out of the record loop cleanly
 └── DedupDuplicate   — record already processed; skip it, count it, move on
 """
 
