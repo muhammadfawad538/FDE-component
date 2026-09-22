@@ -1,39 +1,40 @@
-# Single Dockerfile to run M2 tests for fde_component
-# Build: docker build -t fde-component-test .
-# Run:   docker run --rm fde-component-test
+# Dockerfile for fde_component M2 testing
+# Build: docker compose build
+# Run:   docker compose up
 #
-# Prerequisites: Docker Desktop installed and running
+# The bench container has its own MariaDB + Redis installed locally.
+# Entrypoint creates the site and runs tests after services are ready.
 
 FROM frappe/bench:latest
 
 USER root
 
-# Install system dependencies
+# Install MariaDB server, Redis server, and client tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    mariadb-server \
+    redis-server \
     default-mysql-client \
     redis-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# Prepare MariaDB directories
+RUN mkdir -p /run/mysqld /var/lib/mysql && \
+    chown -R mysql:mysql /run/mysqld /var/lib/mysql
+
+# Prepare Redis directory
+RUN mkdir -p /var/lib/redis && \
+    chown -R redis:redis /var/lib/redis
+
+# Clone the app from GitHub
+ARG REPO_URL=https://github.com/muhammadfawad538/FDE-component.git
 USER frappe
+RUN git clone "$REPO_URL" /tmp/repo && \
+    cp -r /tmp/repo/fde_component /home/frappe/frappe-bench/apps/ && \
+    rm -rf /tmp/repo
 
-# Copy app code into bench apps directory
-COPY fde_component/ /home/frappe/frappe-bench/apps/fde_component/
+# Copy entrypoint script
+COPY entrypoint.sh /home/frappe/entrypoint.sh
+RUN chmod +x /home/frappe/entrypoint.sh
 
-# Set up test site and install app
-# Note: app is already copied, so no need for `bench get-app`
-RUN bench setup requirements && \
-    bench new-site test.localhost \
-        --mariadb-root-password root \
-        --admin-password admin \
-        --no-mq && \
-    bench --site test.localhost install-app fde_component && \
-    bench --site test.localhost migrate && \
-    bench clear-cache
-
-# Run M2 tests
-CMD bash -c "\
-    service mysql start && \
-    service redis-server start && \
-    sleep 5 && \
-    bench --site test.localhost run-tests --app fde_component \
-  "
+# Set the entrypoint
+ENTRYPOINT ["/home/frappe/entrypoint.sh"]

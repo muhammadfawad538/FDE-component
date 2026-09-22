@@ -8,17 +8,18 @@ Retry/DLQ contract (the one unit)
 ``retry_dlq`` is a standalone function that wraps a per-record handler call.
 On failure it retries up to ``max_retries`` times; on exhaustion it writes
 the item to ``SyncJobDLQ``, sets the parent ``SyncJob`` to ``Dead Lettered``,
-and re-raises ``JobDeadLetered``.  Job code never calls DLQ manually.
+and re-raises ``JobDeadLettered``.  Job code never calls DLQ manually.
 
 Testability
 -----------
 ``retry_dlq`` is a pure function — pass it a callable, a job doc reference,
 a record, and max_retries.  Supply a handler that fails N-1 times and
-assert: DLQ doc created, retry_count correct, JobDeadLetered raised.
+assert: DLQ doc created, retry_count correct, JobDeadLettered raised.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import signal
@@ -30,7 +31,7 @@ from frappe.utils import now_datetime
 
 from .exceptions import (
     DedupDuplicate,
-    JobDeadLetered,
+    JobDeadLettered,
     JobFailed,
     JobInterrupted,
 )
@@ -71,7 +72,7 @@ def retry_dlq(
 
     Raises
     ------
-    JobDeadLetered
+    JobDeadLettered
         After ``max_retries`` failures — caller should skip this record.
     JobInterrupted
         If a signal handler fires during retry — propagates immediately.
@@ -114,7 +115,7 @@ def retry_dlq(
 
     # All retries exhausted → write DLQ + raise
     job._write_dlq(record, last_exc, max_retries + 1)
-    raise JobDeadLetered(
+    raise JobDeadLettered(
         f"Record moved to DLQ after {max_retries + 1} attempts: {record!r}"
     )
 
@@ -238,7 +239,7 @@ class CheckpointedJob:
                         record=record,
                         max_retries=self.max_retries,
                     )
-                except JobDeadLetered:
+                except JobDeadLettered:
                     # Item moved to DLQ — count it and move on.
                     self._processed += 1
                     self._publish_progress(total)

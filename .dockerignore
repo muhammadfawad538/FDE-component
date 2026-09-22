@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+*.pyo
+demo_app
+node_modules
+.git
+.github
