@@ -45,8 +45,7 @@ if [ ! -d "sites/test.localhost" ]; then
     echo "=== Creating test site ==="
     bench new-site test.localhost \
         --mariadb-root-password root \
-        --admin-password admin \
-        --no-backup
+        --admin-password admin
 fi
 
 # Install app if not already installed
