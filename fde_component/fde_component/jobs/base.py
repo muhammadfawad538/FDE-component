@@ -35,7 +35,13 @@ from .exceptions import (
     JobFailed,
     JobInterrupted,
 )
-from .idempotency import IdempotencyKey, check_dedup, mark_dedup
+from .idempotency import (
+    IdempotencyKey,
+    check_dedup,
+    claim_dedup,
+    complete_dedup,
+    reclaim_stale_claims,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +231,13 @@ class CheckpointedJob:
 
                 # --- Idempotency check ---
                 key = self._idempotency_key(record)
-                try:
-                    check_dedup(self.job_type, key)
-                except DedupDuplicate:
+
+                # Reclaim stale claims from crashed workers before checking
+                reclaim_stale_claims(self.job_type)
+
+                # Phase 1: claim the record
+                if not claim_dedup(self.job_type, key, self._source_id(record), self.job_name):
+                    # Another worker already claimed this exact record
                     self._processed += 1
                     self._publish_progress(total)
                     continue
@@ -242,8 +252,8 @@ class CheckpointedJob:
                         max_retries=self.max_retries,
                     )
                 except JobDeadLettered:
-                    # Item moved to DLQ — mark as seen so resume skips it.
-                    mark_dedup(self.job_type, key, self._source_id(record), self.job_name)
+                    # Phase 2a: mark as completed so resume skips it
+                    complete_dedup(self.job_type, key)
                     self._processed += 1
                     self._publish_progress(total)
                     self._any_dead_lettered = True
@@ -252,8 +262,8 @@ class CheckpointedJob:
                 if record_failed:
                     continue
 
-                # --- Mark as processed ---
-                mark_dedup(self.job_type, key, self._source_id(record), self.job_name)
+                # Phase 2b: mark as completed
+                complete_dedup(self.job_type, key)
                 self._processed += 1
 
                 # --- Checkpoint + progress ---

@@ -41,6 +41,15 @@
       "fieldtype": "Datetime",
       "label": "First Seen",
       "default": "Now"
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "in_progress\ncompleted",
+      "default": "completed",
+      "reqd": 1,
+      "in_list_view": 1
     }
   ],
   "permissions": [
