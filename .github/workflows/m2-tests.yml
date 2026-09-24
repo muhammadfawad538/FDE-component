@@ -57,12 +57,16 @@ jobs:
           cd $GITHUB_WORKSPACE
           pip install -q -e fde_bench/apps/frappe
 
+          # Re-pin click after Frappe install (Frappe may upgrade it)
+          pip install -q --force-reinstall "click==8.2.0"
+
           cp -r fde_component fde_bench/apps/fde_component
 
           # Frappe 16.35.0 compatibility patch for Python 3.14
           # The `if key in v:` check in frappe/utils/__init__.py:356
           # triggers incorrect __contains__ resolution under Python 3.14.
           # Guarded: fails clearly if the expected line is absent or changed.
+          # Preserves original indentation exactly.
           python3 -c "
           import sys
           target = 'fde_bench/apps/frappe/frappe/utils/__init__.py'
@@ -71,7 +75,8 @@ jobs:
           found = False
           for i, line in enumerate(lines):
               if line.strip() == 'if key in v:':
-                  lines[i] = 'if hasattr(v, \"__contains__\") and key in v:\n'
+                  indent = line[:len(line) - len(line.lstrip())]
+                  lines[i] = indent + 'if hasattr(v, \"__contains__\") and key in v:\n'
                   found = True
                   break
           if not found:
