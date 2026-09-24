@@ -121,5 +121,10 @@ jobs:
 
           cd fde_bench
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
+
+          grep -qxF "fde_component" sites/apps.txt || echo "fde_component" >> sites/apps.txt
+          echo "=== apps.txt ==="
+          cat sites/apps.txt
+
           bench --site test.localhost install-app fde_component
           bench --site test.localhost run-tests --app fde_component
