@@ -74,6 +74,21 @@ jobs:
           # Make fde_component importable in the bench Python environment
           pip install -q -e fde_bench/apps/fde_component
 
+          echo "=== Python ==="
+          python3 --version
+          which python3
+
+          echo "=== Bench Python ==="
+          if [ -x fde_bench/env/bin/python ]; then
+            fde_bench/env/bin/python --version
+          else
+            echo "BENCH PYTHON NOT FOUND"
+          fi
+
+          echo "=== Bench executable ==="
+          which bench
+          head -n 1 "$(which bench)"
+
           # Frappe 16.35.0 compatibility patch for Python 3.14
           # The `if key in v:` check in frappe/utils/__init__.py:356
           # triggers incorrect __contains__ resolution under Python 3.14.
