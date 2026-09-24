@@ -71,6 +71,9 @@ jobs:
 
           cp -r fde_component fde_bench/apps/fde_component
 
+          # Make fde_component importable in the bench Python environment
+          pip install -q -e fde_bench/apps/fde_component
+
           # Frappe 16.35.0 compatibility patch for Python 3.14
           # The `if key in v:` check in frappe/utils/__init__.py:356
           # triggers incorrect __contains__ resolution under Python 3.14.
