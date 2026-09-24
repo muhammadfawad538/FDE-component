@@ -10,7 +10,6 @@ setup(
         "fde_component",
         "fde_component.jobs",
         "fde_component.doctypes",
-        "fde_component.tests",
     ],
     install_requires=["croniter"],
     zip_safe=False,
