@@ -52,7 +52,7 @@ bench --site <your-site> migrate
 
 ## Local Development Setup
 
-The CI environment uses **Python 3.14** + **Frappe 16.35.0** (commit `012667b`). To reproduce it locally:
+The CI environment uses **Python 3.14** + **Frappe 16.35.0** (commit `012667b9c4e7f66d5e1ff5858d2e922331d4300a`). To reproduce it locally:
 
 ```bash
 # 1. Start MariaDB and Redis
@@ -62,19 +62,19 @@ redis-server --daemonize yes
 # 2. Set up MariaDB auth (one-time)
 mysql -u root -e "CREATE USER IF NOT EXISTS 'test'@'localhost' IDENTIFIED BY 'test'; GRANT ALL PRIVILEGES ON *.* TO 'test'@'localhost' WITH GRANT OPTION; FLUSH PRIVILEGES;"
 
-# 3. Run the setup script (matches CI exactly)
+# 3. Run the setup script
 bash fde_component/setup_bench.sh
 ```
 
-The script does the same steps as GitHub Actions: clones Frappe at the pinned commit, creates a virtualenv, installs the app, applies the Python 3.14 compatibility patch, and runs the test suite.
+`setup_bench.sh` is a local helper script. It follows a similar flow to CI but is not identical to the GitHub Actions workflow.
 
 ## CI
 
 Tests run automatically on every push and pull request to `main` via GitHub Actions (`.github/workflows/m2-tests.yml`). The workflow:
 
-1. Spins up MariaDB 10.11 and Redis 7 as services
+1. Spins up MariaDB and Redis 7 as services
 2. Installs Python 3.14
-3. Clones Frappe at commit `012667b` (v16.35.0), installs in a virtualenv
+3. Clones Frappe at commit `012667b9c4e7f66d5e1ff5858d2e922331d4300a` (v16.35.0), installs in a virtualenv
 4. Applies a compatibility patch for Python 3.14
 5. Creates a test site, installs the app, runs the full test suite
 
@@ -130,7 +130,7 @@ redrive_from_dlq("SJ-00001")
 | Milestone | Status |
 |-----------|--------|
 | M1 — App scaffold, DocTypes, base class, idempotency, scheduler | Complete |
-| M2 — Worker integration, retry/DLQ, conformance tests | Complete |
+| M2 — Worker integration, retry/DLQ, conformance tests | Code complete; CI verification in progress |
 | M3 — Progress/resume desk UI | Not started |
 | M4 — Incremental sync scheduling | Not started |
 | M5 — Full conformance suite | Not started |
