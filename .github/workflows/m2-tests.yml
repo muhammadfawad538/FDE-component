@@ -34,15 +34,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p fde_bench/sites fde_bench/assets fde_bench/apps
+          # Install dependencies into the venv
+          pip install -q "click==8.2.0" "frappe-bench"
+
+          # Initialize bench directory structure
+          bench init --skip-redis-config-generation fde_bench
+
+          # Replace auto-installed Frappe with the pinned commit
+          rm -rf fde_bench/apps/frappe
           git clone https://github.com/frappe/frappe.git fde_bench/apps/frappe
           cd fde_bench/apps/frappe
           git checkout 012667b9c4e7f66d5e1ff5858d2e922331d4300a
 
           cd $GITHUB_WORKSPACE
-          python3 -m venv fde_bench/env
-          source fde_bench/env/bin/activate
-          pip install -q "click~=8.2.0" frappe-bench
           pip install -q -e fde_bench/apps/frappe
 
           cp -r fde_component fde_bench/apps/fde_component
@@ -75,6 +79,7 @@ jobs:
             sleep 2
           done
 
-          fde_bench/env/bin/bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
-          fde_bench/env/bin/bench --site test.localhost install-app fde_component
-          fde_bench/env/bin/bench --site test.localhost run-tests --app fde_component
+          cd fde_bench
+          bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
+          bench --site test.localhost install-app fde_component
+          bench --site test.localhost run-tests --app fde_component
