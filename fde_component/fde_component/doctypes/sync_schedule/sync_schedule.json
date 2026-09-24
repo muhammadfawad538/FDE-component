@@ -1,0 +1,88 @@
+{
+  "name": "SyncSchedule",
+  "module": "FDE Component",
+  "doctype": "DocType",
+  "istable": 0,
+  "istree": 0,
+  "engine": "InnoDB",
+  "modified": "2026-01-01 00:00:00.000000",
+  "fields": [
+    {
+      "fieldname": "title",
+      "fieldtype": "Data",
+      "label": "Title",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "job_type",
+      "fieldtype": "Data",
+      "label": "Job Type",
+      "reqd": 1,
+      "in_list_view": 1,
+      "description": "Registered CheckpointedJob subclass key, e.g. 'mail.import'"
+    },
+    {
+      "fieldname": "cron",
+      "fieldtype": "Data",
+      "label": "Cron Expression",
+      "reqd": 1,
+      "description": "5-field cron expression, e.g. '*/5 * * * *'"
+    },
+    {
+      "fieldname": "active",
+      "fieldtype": "Check",
+      "label": "Active",
+      "default": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "source_config",
+      "fieldtype": "JSON",
+      "label": "Source Config",
+      "description": "Opaque JSON passed to the job on each run"
+    },
+    {
+      "fieldname": "last_fired",
+      "fieldtype": "Datetime",
+      "label": "Last Fired",
+      "read_only": 1
+    },
+    {
+      "fieldname": "column_break_1",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "notes",
+      "fieldtype": "Small Text",
+      "label": "Notes"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    },
+    {
+      "role": "FDE",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 0,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "autoname": "SC-.#####",
+  "track_changes": 1,
+  "track_seen": 0
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "doctype": "Role",
+    "name": "FDE",
+    "role_name": "FDE",
+    "desk_access": 1,
+    "disabled": 0
+  }
+]
