@@ -30,6 +30,14 @@ jobs:
           sudo service redis-server start 2>/dev/null || sudo redis-server --daemonize yes
           sleep 5
 
+          # Configure MariaDB root password for bench new-site
+          # Ubuntu MariaDB defaults to auth_socket; bench needs password auth
+          sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'test'; FLUSH PRIVILEGES;" 2>/dev/null || true
+          mysqladmin -u root -ptest ping --silent 2>/dev/null || {
+            echo "Setting MariaDB root password..."
+            sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'test'; FLUSH PRIVILEGES;"
+          }
+
       - name: Set up Node.js 24
         uses: actions/setup-node@v4
         with:
@@ -42,8 +50,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Install dependencies into the venv
-          pip install -q "click==8.2.0" "frappe-bench"
+          # Install bench CLI (pinned for reproducibility)
+          pip install -q "frappe-bench==5.31.0"
 
           # Initialize bench directory structure
           bench init --skip-redis-config-generation fde_bench
@@ -57,8 +65,9 @@ jobs:
           cd $GITHUB_WORKSPACE
           pip install -q -e fde_bench/apps/frappe
 
-          # Re-pin click after Frappe install (Frappe may upgrade it)
-          pip install -q --force-reinstall "click==8.2.0"
+          # Diagnostics: show installed Click and bench versions
+          python3 -c "import click; print('Click version:', click.__version__)"
+          bench --version
 
           cp -r fde_component fde_bench/apps/fde_component
 
