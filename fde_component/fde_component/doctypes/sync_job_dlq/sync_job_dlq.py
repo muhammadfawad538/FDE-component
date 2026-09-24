@@ -11,12 +11,19 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     """
     Server action: create a new SyncJob for this DLQ item and set
     ``re_drive_status = "Re-driven"``.
+
+    Clears the parent job's dedup rows so the new job doesn't get
+    blocked by previously-seen idempotency keys.
     """
     new_job = frappe.new_doc("SyncJob")
     new_job.job_type = frappe.db.get_value("SyncJob", doc.sync_job, "job_type")
     new_job.status = "Queued"
     new_job.source_config = frappe.db.get_value("SyncJob", doc.sync_job, "source_config") or "{}"
     new_job.insert(ignore_permissions=True)
+    frappe.db.commit()
+
+    # Clear parent job's dedup rows so the re-drive isn't blocked by them
+    frappe.db.delete("SyncJobDedup", {"sync_job_id": doc.sync_job})
     frappe.db.commit()
 
     doc.status = "Re-driven"

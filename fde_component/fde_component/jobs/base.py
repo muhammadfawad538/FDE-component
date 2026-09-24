@@ -306,10 +306,10 @@ class CheckpointedJob:
 
     def _write_dlq(self, record: Any, error: BaseException | None, retry_count: int) -> None:
         """
-        Write a dead-letter entry for *record*.
-
-        Called by ``retry_dlq`` only — job code must not call this directly.
-        Sets the parent ``SyncJob`` status to ``Dead Lettered``.
+        Write a dead-letter entry for *record* and mark the parent job as
+        Dead Lettered.  Both writes are a single atomic transaction — either
+        both commit or both roll back.  Called by ``retry_dlq`` only; job code
+        must not call this directly.
         """
         try:
             doc = frappe.new_doc("SyncJobDLQ")
@@ -319,13 +319,7 @@ class CheckpointedJob:
             doc.retry_count = retry_count
             doc.status = "Dead Lettered"
             doc.insert(ignore_permissions=True)
-            frappe.db.commit()
-        except Exception:
-            frappe.db.rollback()
-            logger.exception("Job %s failed to write DLQ entry", self.job_name)
 
-        # Update parent job status — DLQ means the job itself is dead-lettered
-        try:
             frappe.db.set_value(
                 "SyncJob",
                 self.job_name,
@@ -334,6 +328,7 @@ class CheckpointedJob:
             frappe.db.commit()
         except Exception:
             frappe.db.rollback()
+            logger.exception("Job %s failed to write DLQ entry", self.job_name)
 
     # ── Signal handling ────────────────────────────────────────────────────
 

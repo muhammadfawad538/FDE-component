@@ -37,8 +37,9 @@ Queued → Running → Interrupted → Completed | Failed | Dead Lettered
 
 ## Prerequisites
 
-- Frappe 16 bench (MariaDB + Redis running)
-- Python 3.10+
+- Python 3.14
+- MariaDB + Redis
+- Ubuntu/Debian (CI and setup_bench.sh target this environment)
 
 ## Installation
 
@@ -48,6 +49,38 @@ bench get-app fde_component https://github.com/muhammadfawad538/FDE-component.gi
 bench --site <your-site> install-app fde_component
 bench --site <your-site> migrate
 ```
+
+## Local Development Setup
+
+The CI environment uses **Python 3.14** + **Frappe 16.35.0** (commit `012667b`). To reproduce it locally:
+
+```bash
+# 1. Start MariaDB and Redis
+sudo service mariadb start
+redis-server --daemonize yes
+
+# 2. Set up MariaDB auth (one-time)
+mysql -u root -e "CREATE USER IF NOT EXISTS 'test'@'localhost' IDENTIFIED BY 'test'; GRANT ALL PRIVILEGES ON *.* TO 'test'@'localhost' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+
+# 3. Run the setup script (matches CI exactly)
+bash fde_component/setup_bench.sh
+```
+
+The script does the same steps as GitHub Actions: clones Frappe at the pinned commit, creates a virtualenv, installs the app, applies the Python 3.14 compatibility patch, and runs the test suite.
+
+## CI
+
+Tests run automatically on every push and pull request to `main` via GitHub Actions (`.github/workflows/m2-tests.yml`). The workflow:
+
+1. Spins up MariaDB 10.11 and Redis 7 as services
+2. Installs Python 3.14
+3. Clones Frappe at commit `012667b` (v16.35.0), installs in a virtualenv
+4. Applies a compatibility patch for Python 3.14
+5. Creates a test site, installs the app, runs the full test suite
+
+### Why the compatibility patch?
+
+Frappe 16.35.0's `frappe/utils/__init__.py` contains `if key in v:` at line 356. Under Python 3.14, this triggers incorrect `__contains__` resolution for `frappe._dict` objects. The patch changes it to `if hasattr(v, "__contains__") and key in v:`, which forces the explicit method lookup. The patch is guarded — it fails clearly if the expected line is absent or has changed, preventing silent corruption of unrelated Frappe code.
 
 ## Usage
 

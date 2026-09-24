@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# setup_bench.sh — Set up bench environment and run M2 tests for fde_component
-# Run from the Codespace terminal: bash setup_bench.sh
+# setup_bench.sh — Reproduce the GitHub Actions CI test environment locally.
+# Run from the repo root: bash fde_component/setup_bench.sh
+# Requires: Python 3.14, MariaDB, Redis
 set -euo pipefail
 
-BENCH_DIR="/workspaces/FDE-component/fde_bench"
 SITE="test.localhost"
 MYSQL_ROOT_PW="test"
 ADMIN_PW="admin"
-APP_URL="https://github.com/muhammadfawad538/FDE-component.git"
-APP_DIR="${BENCH_DIR}/apps/fde_component"
+FRAPPE_COMMIT="012667b9c4e7f66d5e1ff5858d2e922331d4300a"
+
+# Verify Python version matches CI
+PYTHON_BIN="python3"
+if command -v python3.14 &>/dev/null; then
+    PYTHON_BIN="python3.14"
+elif [ "$(python3 --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1-2)" != "3.14" ]; then
+    echo "WARNING: CI uses Python 3.14, but system python3 is $(python3 --version 2>&1 | cut -d' ' -f2)"
+fi
 
 echo "========================================"
-echo " Step 1/7: System dependencies"
+echo " Step 1/6: System dependencies"
 echo "========================================"
 sudo apt-get update -qq
 sudo apt-get install -y -qq redis-server mariadb-server
@@ -19,10 +26,10 @@ echo "[OK] Dependencies installed"
 
 echo ""
 echo "========================================"
-echo " Step 2/7: Start services"
+echo " Step 2/6: Start services"
 echo "========================================"
 redis-server --daemonize yes
-sudo service mariadb start
+sudo service mariadb start 2>/dev/null || sudo mysqld --user=root --datadir=/var/lib/mysql &
 sleep 2
 mysqladmin -u root -p${MYSQL_ROOT_PW} ping >/dev/null 2>&1 || {
     echo "  Setting MySQL root password..."
@@ -32,10 +39,9 @@ echo "[OK] Redis and MariaDB running"
 
 echo ""
 echo "========================================"
-echo " Step 3/7: MariaDB root auth"
+echo " Step 3/6: MariaDB root auth"
 echo "========================================"
 sudo mysql -u root <<'SQL' 2>/dev/null || true
-ALTER USER 'root'@'localhost' IDENTIFIED VIA unix_socket;
 CREATE USER IF NOT EXISTS 'test'@'localhost' IDENTIFIED BY 'test';
 GRANT ALL PRIVILEGES ON *.* TO 'test'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
@@ -44,99 +50,65 @@ echo "[OK] MariaDB auth configured"
 
 echo ""
 echo "========================================"
-echo " Step 4/7: Crontab workaround"
+echo " Step 4/6: Install bench"
 echo "========================================"
-sudo bash -c 'echo -e "#!/bin/sh\nexit 0" > /usr/bin/crontab'
-sudo chmod +x /usr/bin/crontab
-echo "[OK] crontab stub in place"
-
-echo ""
-echo "========================================"
-echo " Step 5/7: Install bench"
-echo "========================================"
-pip install frappe-bench -q
+pip install -q "click~=8.2.0" frappe-bench
 echo "[OK] bench installed"
 
 echo ""
 echo "========================================"
-echo " Step 6/7: Initialize bench"
+echo " Step 5/6: Set up bench (matches CI exactly)"
 echo "========================================"
-cd /workspaces/FDE-component
-rm -rf fde_bench
-bench init --skip-redis-config-generation fde_bench
-cd "${BENCH_DIR}"
-echo "[OK] bench initialized at ${BENCH_DIR}"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${REPO_DIR}"
+
+mkdir -p fde_bench/sites fde_bench/assets
+git clone https://github.com/frappe/frappe.git fde_bench/apps/frappe
+cd fde_bench/apps/frappe
+git checkout ${FRAPPE_COMMIT}
+cd "${REPO_DIR}"
+
+python3 -m venv fde_bench/env
+source fde_bench/env/bin/activate
+pip install -q -e fde_bench/apps/frappe
+
+cp -r "${REPO_DIR}/fde_component" fde_bench/apps/fde_component
+
+# Frappe 16.35.0 compatibility patch for Python 3.14
+# The `if key in v:` check in frappe/utils/__init__.py:356
+# triggers incorrect __contains__ resolution under Python 3.14.
+# Guarded: fails clearly if the expected line is absent or changed.
+python3 -c "
+import sys
+target = 'fde_bench/apps/frappe/frappe/utils/__init__.py'
+with open(target) as f:
+    lines = f.readlines()
+found = False
+for i, line in enumerate(lines):
+    if line.strip() == 'if key in v:':
+        lines[i] = 'if hasattr(v, \"__contains__\") and key in v:\n'
+        found = True
+        break
+if not found:
+    sys.exit('ERROR: Expected line \"if key in v:\" not found in ' + target + ' — monkeypatch aborted')
+with open(target, 'w') as f:
+    f.writelines(lines)
+print('Applied Python 3.14 compatibility patch to frappe/utils/__init__.py')
+"
 
 echo ""
 echo "========================================"
-echo " Pinning Frappe to stable version"
+echo " Step 6/6: Create site and run tests"
 echo "========================================"
-cd "${BENCH_DIR}/apps/frappe"
-git checkout version-16
-cd "${BENCH_DIR}"
-echo "[OK] Frappe pinned to version-16"
+for i in $(seq 1 30); do
+    mysqladmin ping -h 127.0.0.1 -u root -p${MYSQL_ROOT_PW} --silent && break
+    echo "Waiting for MariaDB... ($i)"
+    sleep 2
+done
 
-echo ""
-echo "========================================"
-echo " Step 8/7: Create site"
-echo "========================================"
-echo -e "test\ntest\n" | bench new-site "${SITE}" \
-    --mariadb-root-username test \
-    --mariadb-root-password test \
-    --admin-password "${ADMIN_PW}" \
-    --force
-echo "[OK] site ${SITE} created"
+bench new-site ${SITE} --mariadb-root-password ${MYSQL_ROOT_PW} --admin-password ${ADMIN_PW} --force
+bench --site ${SITE} install-app fde_component
+bench --site ${SITE} run-tests --app fde_component
 
-echo ""
-echo "========================================"
-echo " Step 7/7: Redis configs, app install, tests"
-echo "========================================"
-
-# Redis configs
-cat > "${BENCH_DIR}/sites/${SITE}/redis_cache.conf" << 'RCONF'
-bind 127.0.0.1
-port 11000
-timeout 0
-save ""
-maxmemory-policy allkeys-lru
-RCONF
-
-cat > "${BENCH_DIR}/sites/${SITE}/redis_socketio.conf" << 'RCONF'
-bind 127.0.0.1
-port 12000
-timeout 0
-save ""
-maxmemory-policy allkeys-lru
-RCONF
-
-cat > "${BENCH_DIR}/sites/${SITE}/redis_queue.conf" << 'RCONF'
-bind 127.0.0.1
-port 13000
-timeout 0
-save ""
-maxmemory-policy allkeys-lru
-RCONF
-
-# Start Redis instances
-redis-server "${BENCH_DIR}/sites/${SITE}/redis_cache.conf" --daemonize yes
-redis-server "${BENCH_DIR}/sites/${SITE}/redis_socketio.conf" --daemonize yes
-redis-server "${BENCH_DIR}/sites/${SITE}/redis_queue.conf" --daemonize yes
-echo "[OK] Redis instances started on 11000, 12000, 13000"
-
-# Symlink app from repo
-rm -rf "${BENCH_DIR}/apps/fde_component"
-ln -s /workspaces/FDE-component/fde_component "${BENCH_DIR}/apps/fde_component"
-echo "[OK] App symlinked"
-
-# Install app
-bench --site "${SITE}" install-app fde_component
-echo "[OK] App installed"
-
-# Run tests
-echo ""
-echo "========================================"
-echo " Running M2 tests"
-echo "========================================"
-bench --site "${SITE}" run-tests --app fde_component
 echo ""
 echo "[DONE] All steps completed"

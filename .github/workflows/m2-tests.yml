@@ -30,10 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.14"
 
       - name: Install system dependencies
         run: |
@@ -48,7 +48,9 @@ jobs:
           pip install -q "click~=8.2.0" frappe-bench
 
           mkdir -p fde_bench/sites fde_bench/assets
-          git clone --depth 1 --branch version-16 https://github.com/frappe/frappe.git fde_bench/apps/frappe
+          git clone https://github.com/frappe/frappe.git fde_bench/apps/frappe
+          cd fde_bench/apps/frappe
+          git checkout 012667b9c4e7f66d5e1ff5858d2e922331d4300a
 
           cd fde_bench
           python3 -m venv env
@@ -57,13 +59,26 @@ jobs:
 
           cp -r ../fde_component apps/fde_component
 
+          # Frappe 16.35.0 compatibility patch for Python 3.14
+          # The `if key in v:` check in frappe/utils/__init__.py:356
+          # triggers incorrect __contains__ resolution under Python 3.14.
+          # Guarded: fails clearly if the expected line is absent or changed.
           python3 -c "
-          with open('apps/frappe/frappe/utils/__init__.py', 'r') as f:
-              content = f.read()
-          content = content.replace('if key in v:', 'if hasattr(v, \"__contains__\") and key in v:')
-          with open('apps/frappe/frappe/utils/__init__.py', 'w') as f:
-              f.write(content)
-          print('Patched')
+          import sys
+          target = 'apps/frappe/frappe/utils/__init__.py'
+          with open(target) as f:
+              lines = f.readlines()
+          found = False
+          for i, line in enumerate(lines):
+              if line.strip() == 'if key in v:':
+                  lines[i] = 'if hasattr(v, \"__contains__\") and key in v:\n'
+                  found = True
+                  break
+          if not found:
+              sys.exit('ERROR: Expected line \"if key in v:\" not found in ' + target + ' — monkeypatch aborted')
+          with open(target, 'w') as f:
+              f.writelines(lines)
+          print('Applied Python 3.14 compatibility patch to frappe/utils/__init__.py')
           "
 
           for i in $(seq 1 30); do
