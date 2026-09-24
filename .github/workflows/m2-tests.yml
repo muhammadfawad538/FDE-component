@@ -72,7 +72,7 @@ jobs:
           cp -r fde_component fde_bench/apps/fde_component
 
           # Make fde_component importable in the bench Python environment
-          pip install -q -e fde_bench/apps/fde_component
+          fde_bench/env/bin/python -m pip install -q -e fde_bench/apps/fde_component
 
           echo "=== Python ==="
           python3 --version
