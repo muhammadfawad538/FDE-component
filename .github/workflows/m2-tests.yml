@@ -10,19 +10,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
-      mariadb:
-        image: mariadb:10.11
-        env:
-          MYSQL_ROOT_PASSWORD: test
-          MYSQL_USER: test
-          MYSQL_PASSWORD: test
-        ports: ["3306:3306"]
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -ptest"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
       redis:
         image: redis:7-alpine
         ports: ["6379:6379"]
@@ -52,12 +39,12 @@ jobs:
           cd fde_bench/apps/frappe
           git checkout 012667b9c4e7f66d5e1ff5858d2e922331d4300a
 
-          cd fde_bench
-          python3 -m venv env
-          source env/bin/activate
-          pip install -q -e apps/frappe
+          cd $GITHUB_WORKSPACE
+          python3 -m venv fde_bench/env
+          source fde_bench/env/bin/activate
+          pip install -q -e fde_bench/apps/frappe
 
-          cp -r ../fde_component apps/fde_component
+          cp -r fde_component fde_bench/apps/fde_component
 
           # Frappe 16.35.0 compatibility patch for Python 3.14
           # The `if key in v:` check in frappe/utils/__init__.py:356
@@ -65,7 +52,7 @@ jobs:
           # Guarded: fails clearly if the expected line is absent or changed.
           python3 -c "
           import sys
-          target = 'apps/frappe/frappe/utils/__init__.py'
+          target = 'fde_bench/apps/frappe/frappe/utils/__init__.py'
           with open(target) as f:
               lines = f.readlines()
           found = False
@@ -87,6 +74,6 @@ jobs:
             sleep 2
           done
 
-          bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
-          bench --site test.localhost install-app fde_component
-          bench --site test.localhost run-tests --app fde_component
+          fde_bench/env/bin/bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
+          fde_bench/env/bin/bench --site test.localhost install-app fde_component
+          fde_bench/env/bin/bench --site test.localhost run-tests --app fde_component
