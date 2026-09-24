@@ -32,7 +32,7 @@ jobs:
 
       - name: Set up bench manually
         run: |
-          pip install -q "click~=8.2.0" frappe-bench
+          set -euo pipefail
 
           mkdir -p fde_bench/sites fde_bench/assets fde_bench/apps
           git clone https://github.com/frappe/frappe.git fde_bench/apps/frappe
@@ -42,6 +42,7 @@ jobs:
           cd $GITHUB_WORKSPACE
           python3 -m venv fde_bench/env
           source fde_bench/env/bin/activate
+          pip install -q "click~=8.2.0" frappe-bench
           pip install -q -e fde_bench/apps/frappe
 
           cp -r fde_component fde_bench/apps/fde_component
