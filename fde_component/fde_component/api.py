@@ -34,6 +34,9 @@ def redrive_from_dlq(job_name: str) -> dict:
         for dlq_name in dlq_names:
             frappe.delete_doc("SyncJobDLQ", dlq_name, ignore_permissions=True)
 
+        # Clear dedup state so the redriven job can reprocess its records
+        frappe.db.delete("SyncJobDedup", {"sync_job_id": job_name})
+
         # Enqueue the job
         frappe.enqueue(
             "fde_component.jobs.runner.run_job",

@@ -170,6 +170,7 @@ class CheckpointedJob:
         self.batch_size: int = kwargs.get("batch_size", 1000)
         self._last_checkpoint_time: float = time.monotonic()
         self._processed: int = 0
+        self._any_dead_lettered: bool = False
         self._setup_signal_handlers()
 
     # ── Abstract interface ─────────────────────────────────────────────────
@@ -232,6 +233,7 @@ class CheckpointedJob:
                     continue
 
                 # --- Process with retry/DLQ (single unit, tested in isolation) ---
+                record_failed = False
                 try:
                     retry_dlq(
                         func=self.process_record,
@@ -240,9 +242,14 @@ class CheckpointedJob:
                         max_retries=self.max_retries,
                     )
                 except JobDeadLettered:
-                    # Item moved to DLQ — count it and move on.
+                    # Item moved to DLQ — mark as seen so resume skips it.
+                    mark_dedup(self.job_type, key, self._source_id(record), self.job_name)
                     self._processed += 1
                     self._publish_progress(total)
+                    self._any_dead_lettered = True
+                    record_failed = True
+
+                if record_failed:
                     continue
 
                 # --- Mark as processed ---
@@ -266,7 +273,12 @@ class CheckpointedJob:
         # Final checkpoint at end of run (even on interruption)
         self.save_checkpoint(offset)
 
-        if not self._interrupted:
+        if self._any_dead_lettered:
+            self._update_counts(processed=self._processed)
+            self._update_status("Dead Lettered")
+            logger.info("Job %s dead lettered: %d records processed before failure",
+                        self.job_name, self._processed)
+        elif not self._interrupted:
             self._update_counts(processed=self._processed)
             self._update_status("Completed")
             self.on_complete()

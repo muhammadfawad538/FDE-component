@@ -204,6 +204,52 @@ class TestKillAndResume:
         )
 
 
+class TestTransientFailureResume:
+
+    def test_interrupted_record_is_retried_not_skipped(self, sync_job_doc: str):
+        """
+        Simulate a record that fails on its first attempt but succeeds on retry.
+        Verifies that the record is eventually processed and appears in the
+        dedup set exactly once — not skipped, not double-applied.
+        """
+        CountingImportJob.processed_indices.clear()
+
+        class FlakyJob(CheckpointedJob):
+            job_type = "test.flaky_import"
+            max_retries = 2
+            checkpoint_every = 1000
+            checkpoint_seconds = 30.0
+
+            def __init__(self, job_name: str, **kwargs):
+                super().__init__(job_name, **kwargs)
+                self._fail_once_on = {2}  # fail first attempt for index 2
+
+            def iter_records(self, offset: int):
+                for i in range(offset, 20):
+                    yield {"id": f"record-{i}", "index": i}
+
+            def process_record(self, record):
+                idx = record["index"]
+                if idx in self._fail_once_on:
+                    self._fail_once_on.discard(idx)
+                    raise JobFailed(f"Transient failure at index {idx}")
+                CountingImportJob.processed_indices.add(idx)
+
+        job = FlakyJob(job_name=sync_job_doc)
+        job.run()
+
+        doc = frappe.get_doc("SyncJob", sync_job_doc)
+        assert doc.status == "Completed"
+
+        # All 20 records processed exactly once
+        assert len(CountingImportJob.processed_indices) == 20
+        assert 2 in CountingImportJob.processed_indices
+
+        # Dedup count == total records (no duplicates)
+        dedup_count = frappe.db.count("SyncJobDedup", {"job_type": "test.flaky_import"})
+        assert dedup_count == 20
+
+
 class TestCheckpointFrequency:
 
     def test_checkpoints_written_at_configured_interval(self, sync_job_doc: str):
