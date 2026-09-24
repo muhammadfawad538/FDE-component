@@ -47,7 +47,7 @@ jobs:
         run: |
           pip install -q "click~=8.2.0" frappe-bench
 
-          mkdir -p fde_bench/sites fde_bench/assets
+          mkdir -p fde_bench/sites fde_bench/assets fde_bench/apps
           git clone https://github.com/frappe/frappe.git fde_bench/apps/frappe
           cd fde_bench/apps/frappe
           git checkout 012667b9c4e7f66d5e1ff5858d2e922331d4300a
