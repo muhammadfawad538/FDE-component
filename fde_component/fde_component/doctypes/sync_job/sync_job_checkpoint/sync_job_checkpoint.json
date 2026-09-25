@@ -1,0 +1,75 @@
+{
+  "name": "SyncJobCheckpoint",
+  "module": "FDE Component",
+  "doctype": "DocType",
+  "istable": 1,
+  "istree": 0,
+  "engine": "InnoDB",
+  "modified": "2026-01-01 00:00:00.000000",
+  "fields": [
+    {
+      "fieldname": "offset",
+      "fieldtype": "Int",
+      "label": "Offset",
+      "reqd": 1,
+      "description": "Record offset at this checkpoint (next record to process)"
+    },
+    {
+      "fieldname": "records_processed",
+      "fieldtype": "Int",
+      "label": "Records Processed",
+      "reqd": 1
+    },
+    {
+      "fieldname": "checksum",
+      "fieldtype": "Data",
+      "label": "Checksum",
+      "length": 128,
+      "description": "Lightweight lineage hash for this batch"
+    },
+    {
+      "fieldname": "column_break_1",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "checkpointed_at",
+      "fieldtype": "Datetime",
+      "label": "Checkpointed At",
+      "default": "Now"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    },
+    {
+      "role": "FDE",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 0,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    },
+    {
+      "role": "All",
+      "read": 1,
+      "write": 0,
+      "create": 0,
+      "delete": 0,
+      "submit": 0,
+      "cancel": 0,
+      "amend": 0
+    }
+  ],
+  "track_changes": 0,
+  "track_seen": 0
+}

@@ -1,0 +1,20 @@
+# Docker Compose for fde_component M2 testing
+# Usage:
+#   docker compose up --build
+#   docker compose down -v    # also remove volumes
+
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"   # bench dev server (optional)
+      - "9000:9000"   # socketio (optional)
+    volumes:
+      - bench_sites:/home/frappe/frappe-bench/sites
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+
+volumes:
+  bench_sites:

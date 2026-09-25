@@ -1,0 +1,130 @@
+name: M2 Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-dev mariadb-server mariadb-client redis-server
+          sudo service mariadb start 2>/dev/null || sudo mysqld --user=root --datadir=/var/lib/mysql &
+          sudo service redis-server start 2>/dev/null || sudo redis-server --daemonize yes
+          sleep 5
+
+          # Configure MariaDB root password for bench new-site
+          # Ubuntu MariaDB defaults to auth_socket; bench needs password auth
+          sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'test'; FLUSH PRIVILEGES;" 2>/dev/null || true
+          mysqladmin -u root -ptest ping --silent 2>/dev/null || {
+            echo "Setting MariaDB root password..."
+            sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'test'; FLUSH PRIVILEGES;"
+          }
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.11.0"
+
+      - name: Verify Node.js
+        run: node --version
+
+      - name: Set up bench manually
+        run: |
+          set -euo pipefail
+
+          # Install bench CLI (pinned for reproducibility)
+          pip install -q "frappe-bench==5.31.0"
+
+          # Initialize bench directory structure
+          bench init --skip-redis-config-generation fde_bench
+
+          # Replace auto-installed Frappe with the pinned commit
+          rm -rf fde_bench/apps/frappe
+          git clone https://github.com/frappe/frappe.git fde_bench/apps/frappe
+          cd fde_bench/apps/frappe
+          git checkout 012667b9c4e7f66d5e1ff5858d2e922331d4300a
+
+          cd $GITHUB_WORKSPACE
+          pip install -q -e fde_bench/apps/frappe
+
+          # Diagnostics: show installed Click and bench versions
+          python3 -c "import click; print('Click version:', click.__version__)"
+          bench --version
+
+          cp -r fde_component fde_bench/apps/fde_component
+
+          # Make fde_component importable in the bench Python environment
+          fde_bench/env/bin/python -m pip install -q -e fde_bench/apps/fde_component
+
+          echo "=== Python ==="
+          python3 --version
+          which python3
+
+          echo "=== Bench Python ==="
+          if [ -x fde_bench/env/bin/python ]; then
+            fde_bench/env/bin/python --version
+          else
+            echo "BENCH PYTHON NOT FOUND"
+          fi
+
+          echo "=== Bench executable ==="
+          which bench
+          head -n 1 "$(which bench)"
+
+          # Frappe 16.35.0 compatibility patch for Python 3.14
+          # The `if key in v:` check in frappe/utils/__init__.py:356
+          # triggers incorrect __contains__ resolution under Python 3.14.
+          # Guarded: fails clearly if the expected line is absent or changed.
+          # Preserves original indentation exactly.
+          python3 -c "
+          import sys
+          target = 'fde_bench/apps/frappe/frappe/utils/__init__.py'
+          with open(target) as f:
+              lines = f.readlines()
+          found = False
+          for i, line in enumerate(lines):
+              if line.strip() == 'if key in v:':
+                  indent = line[:len(line) - len(line.lstrip())]
+                  lines[i] = indent + 'if hasattr(v, \"__contains__\") and key in v:\n'
+                  found = True
+                  break
+          if not found:
+              sys.exit('ERROR: Expected line \"if key in v:\" not found in ' + target + ' — monkeypatch aborted')
+          with open(target, 'w') as f:
+              f.writelines(lines)
+          print('Applied Python 3.14 compatibility patch to frappe/utils/__init__.py')
+          "
+
+          for i in $(seq 1 30); do
+            mysqladmin ping -h 127.0.0.1 -u root -ptest --silent && break
+            echo "Waiting for MariaDB... ($i)"
+            sleep 2
+          done
+
+          cd fde_bench
+          bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
+
+          printf "frappe\nfde_component\n" > sites/apps.txt
+          echo "=== apps.txt ==="
+          cat -A sites/apps.txt
+
+          bench --site test.localhost install-app fde_component
+          bench --site test.localhost run-tests --app fde_component
