@@ -132,7 +132,7 @@ jobs:
           # ── Diagnostics: module resolution ──────────────────────────────────────
           env/bin/python -c "
           import frappe
-          frappe.init(site='test.localhost')
+          frappe.init(site='test.localhost', sites_path='sites')
           frappe.connect()
           print('=== Frappe version ===')
           print(frappe.__version__)
