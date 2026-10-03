@@ -130,7 +130,7 @@ jobs:
           bench --site test.localhost install-app fde_component
 
           # ── Diagnostics: module resolution ──────────────────────────────────────
-          fde_bench/env/bin/python -c "
+          env/bin/python -c "
           import frappe
           frappe.init(site='test.localhost')
           frappe.connect()
@@ -151,7 +151,7 @@ jobs:
           print('custom:', d.custom)
           print('=== fde_component/modules.txt ===')
           import os
-          p = 'fde_bench/apps/fde_component/fde_component/modules.txt'
+          p = 'apps/fde_component/fde_component/modules.txt'
           if os.path.exists(p):
               print(open(p).read())
           else:
