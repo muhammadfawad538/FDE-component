@@ -15,7 +15,7 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     Clears ONLY the failed record's dedup row so the new job can reprocess
     it. Other completed records' dedup state is preserved.
 
-    The new job is scoped to the single failed record via ``source_config``.
+    The new job inherits the parent job's checksum lineage via source_config.
     """
     import json
 
@@ -23,12 +23,24 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     new_job = frappe.new_doc("SyncJob")
     new_job.job_type = parent.job_type
     new_job.status = "Queued"
+    new_job.parent_job = parent.name
 
     # Scope the new job to ONLY the failed record
     try:
         source_config = json.loads(parent.source_config or "{}")
     except Exception:
         source_config = {}
+
+    # Inherit parent's checksum lineage: look up parent's last checkpoint
+    parent_last_checksum = frappe.db.get_value(
+        "SyncJobCheckpoint",
+        {"parent": parent.name},
+        "checksum",
+        order_by="idx desc",
+    )
+    if parent_last_checksum:
+        source_config["parent_checksum"] = parent_last_checksum
+
     source_config["redrive_key"] = doc.idempotency_key
     source_config["redrive_parent"] = doc.sync_job
     new_job.source_config = json.dumps(source_config)

@@ -84,6 +84,8 @@ def retry_dlq(
         If a signal handler fires during retry — propagates immediately.
     """
     last_exc: BaseException | None = None
+    if max_retries < 0:
+        raise ValueError(f"max_retries must be non-negative, got {max_retries}")
 
     for attempt in range(1, max_retries + 2):  # 1 .. max_retries + 1
         try:
@@ -161,6 +163,7 @@ class CheckpointedJob:
     max_retries: int = 3        # retry attempts per record before DLQ
     checkpoint_every: int = 1000  # records between checkpoints
     checkpoint_seconds: float = 30.0  # seconds between checkpoints
+    _redis_publish_interval: float = 1.0  # minimum seconds between Redis publish calls
 
     # ── Set at runtime by the worker ───────────────────────────────────────
     job_name: str = ""          # SyncJob doc name (set in __init__)
@@ -178,6 +181,13 @@ class CheckpointedJob:
         self._processed: int = 0
         self._any_dead_lettered: bool = False
         self._checksum_hasher = hashlib.sha256()
+        self._last_publish_time: float = 0.0
+
+        # Restore parent checksum for redrive jobs (lineage chain)
+        parent_checksum = kwargs.get("parent_checksum")
+        if parent_checksum:
+            self._checksum_hasher = hashlib.sha256(parent_checksum.encode())
+
         self._setup_signal_handlers()
 
     # ── Abstract interface ─────────────────────────────────────────────────
@@ -378,6 +388,7 @@ class CheckpointedJob:
         except Exception:
             frappe.db.rollback()
             logger.exception("Job %s failed to write DLQ entry", self.job_name)
+            raise  # re-raise — caller must know the DLQ write failed
 
     # ── Signal handling ────────────────────────────────────────────────────
 
@@ -396,8 +407,14 @@ class CheckpointedJob:
     def _publish_progress(self, total: int | None) -> None:
         """
         Push live progress to the desk via ``frappe.publish_realtime``.
-        Called at every record — overhead is minimal (a single Redis PUBLISH).
+        Throttled to at most one publish per ``_redis_publish_interval`` seconds
+        to avoid flooding Redis at high throughput.
         """
+        now = time.monotonic()
+        if now - self._last_publish_time < self._redis_publish_interval:
+            return
+        self._last_publish_time = now
+
         if total and total > 0:
             pct = min(100.0, (self._processed / total) * 100.0)
         else:

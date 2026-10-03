@@ -27,7 +27,7 @@ def _expected_hex(job_type: str, source_id: str, content: str = "") -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-class TestIdempotencyKey:
+class TestIdempotencyKey(unittest.TestCase):
     def test_same_inputs_produce_same_digest(self):
         k1 = _make_key("msg-1", "hello")
         k2 = _make_key("msg-1", "hello")
