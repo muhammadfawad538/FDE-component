@@ -131,6 +131,8 @@ jobs:
 
           bench --site test.localhost install-app fde_component
 
+          mkdir -p fde_bench/test.localhost/logs
+
           # ── Diagnostics: module resolution ──────────────────────────────────────
           printf '%s\n' \
             "import frappe, os" \
