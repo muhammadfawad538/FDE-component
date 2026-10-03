@@ -154,6 +154,6 @@ jobs:
             "p = os.path.join(frappe.get_app_path('fde_component'), 'modules.txt')" \
             "print(open(p).read() if os.path.exists(p) else 'NOT FOUND: ' + p)" \
             > /tmp/diag_module.py
-          env/bin/python /tmp/diag_module.py
+          cd fde_bench && env/bin/python /tmp/diag_module.py
 
           bench --site test.localhost run-tests --app fde_component
