@@ -120,9 +120,8 @@ jobs:
             sleep 2
           done
 
-          mkdir -p logs
-
           cd fde_bench
+          mkdir -p logs test.localhost/logs
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
 
           printf "frappe\nfde_component\n" > sites/apps.txt
@@ -130,8 +129,6 @@ jobs:
           cat -A sites/apps.txt
 
           bench --site test.localhost install-app fde_component
-
-          mkdir -p fde_bench/test.localhost/logs
 
           # ── Diagnostics: module resolution ──────────────────────────────────────
           printf '%s\n' \
