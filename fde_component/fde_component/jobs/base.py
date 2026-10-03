@@ -177,16 +177,22 @@ class CheckpointedJob:
         self._last_checkpoint_time: float = time.monotonic()
         self._processed: int = 0
         self._any_dead_lettered: bool = False
+        self._checksum_hasher = hashlib.sha256()
         self._setup_signal_handlers()
 
     # ── Abstract interface ─────────────────────────────────────────────────
 
-    def iter_records(self, offset: int) -> Generator[Any, None, None]:
+    def iter_records(self, offset: int, redrive_key: str | None = None) -> Generator[Any, None, None]:
         """
         Yield records to process, starting at *offset*.
 
         Subclasses must implement this.  Each yielded value is passed to
         ``process_record``.  Return an empty generator when done.
+
+        When *redrive_key* is provided the source should yield ONLY the
+        record whose idempotency key matches it, if possible.  If the
+        source layer cannot filter by key, yield all records — the base
+        class will still apply a post-yield safety filter.
         """
         raise NotImplementedError
 
@@ -219,25 +225,43 @@ class CheckpointedJob:
         self._set_started()
         self._processed = 0
         self._last_checkpoint_time = time.monotonic()
+        self._restore_checksum()
         offset = self._get_start_offset()
         total = self._get_total()
 
         logger.info("Job %s starting at offset %d (total=%s)", self.job_name, offset, total)
 
         try:
-            for record in self.iter_records(offset):
+            redrive_key = self._get_redrive_key()
+            for record in self.iter_records(offset, redrive_key=redrive_key):
                 if self._interrupted:
                     break
+
+                # --- Redrive scope filter (defense-in-depth) ---
+                if redrive_key is not None:
+                    candidate_key = self._idempotency_key(record)
+                    if candidate_key.hex != redrive_key:
+                        continue
 
                 # --- Idempotency check ---
                 key = self._idempotency_key(record)
 
-                # Reclaim stale claims from crashed workers before checking
+                # Skip records already completed by a previous run
+                try:
+                    check_dedup(self.job_type, key)
+                except DedupDuplicate:
+                    self._checksum_hasher.update(key.hex.encode())
+                    self._processed += 1
+                    self._publish_progress(total)
+                    continue
+
+                # Reclaim stale claims from crashed workers before claiming
                 reclaim_stale_claims(self.job_type)
 
                 # Phase 1: claim the record
                 if not claim_dedup(self.job_type, key, self._source_id(record), self.job_name):
                     # Another worker already claimed this exact record
+                    self._checksum_hasher.update(key.hex.encode())
                     self._processed += 1
                     self._publish_progress(total)
                     continue
@@ -254,6 +278,7 @@ class CheckpointedJob:
                 except JobDeadLettered:
                     # Phase 2a: mark as completed so resume skips it
                     complete_dedup(self.job_type, key)
+                    self._checksum_hasher.update(key.hex.encode())
                     self._processed += 1
                     self._publish_progress(total)
                     self._any_dead_lettered = True
@@ -264,6 +289,7 @@ class CheckpointedJob:
 
                 # Phase 2b: mark as completed
                 complete_dedup(self.job_type, key)
+                self._checksum_hasher.update(key.hex.encode())
                 self._processed += 1
 
                 # --- Checkpoint + progress ---
@@ -336,6 +362,7 @@ class CheckpointedJob:
         try:
             doc = frappe.new_doc("SyncJobDLQ")
             doc.sync_job = self.job_name
+            doc.idempotency_key = self._idempotency_key(record).hex
             doc.payload = json.dumps(self._serialize_record(record), default=str)
             doc.reason = str(error) if error else "Unknown error"
             doc.retry_count = retry_count
@@ -429,6 +456,39 @@ class CheckpointedJob:
         """Return total record count if known, else None."""
         return frappe.db.get_value("SyncJob", self.job_name, "total_records")
 
+    def _get_redrive_key(self) -> str | None:
+        """
+        Return the idempotency key if this job was created by DLQ redrive,
+        or None for a normal run.
+        """
+        try:
+            source_config = frappe.db.get_value("SyncJob", self.job_name, "source_config") or "{}"
+            config = frappe.parse_json(source_config)
+            return config.get("redrive_key")
+        except Exception:
+            return None
+
+    def _restore_checksum(self) -> None:
+        """Restore the running checksum from the last checkpoint."""
+        last = frappe.get_all(
+            "SyncJobCheckpoint",
+            filters={"parent": self.job_name},
+            fields=["checksum"],
+            order_by="idx desc",
+            limit=1,
+        )
+        if last and last[0].get("checksum"):
+            self._checksum_hasher = hashlib.sha256(last[0]["checksum"].encode())
+        else:
+            self._checksum_hasher = hashlib.sha256()
+
+    def _compute_checksum(self) -> str:
+        """
+        Running SHA-256 of all idempotency keys processed so far.
+        Used for lineage verification — changes when source data changes.
+        """
+        return self._checksum_hasher.hexdigest()
+
     # ── Hooks for subclasses ───────────────────────────────────────────────
 
     def _idempotency_key(self, record: Any) -> IdempotencyKey:
@@ -457,10 +517,3 @@ class CheckpointedJob:
         if isinstance(record, dict):
             return record
         return str(record)
-
-    def _compute_checksum(self) -> str:
-        """
-        Lightweight checksum of the current batch for lineage verification.
-        Override for domain-specific checksums.
-        """
-        return f"offset={self._processed}"

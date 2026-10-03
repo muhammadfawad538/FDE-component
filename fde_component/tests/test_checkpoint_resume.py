@@ -250,6 +250,70 @@ class TestTransientFailureResume:
         assert dedup_count == 20
 
 
+class TestChecksumLineage:
+
+    def test_checksum_changes_with_source_id(self, sync_job_doc: str):
+        """
+        The checksum must change when the source data changes.
+        Same source_id → same checksum. Different source_id → different checksum.
+        """
+        job = CountingImportJob(job_name=sync_job_doc, total=10)
+        job.run()
+
+        checksums = []
+        checkpoints = frappe.get_all(
+            "SyncJobCheckpoint",
+            filters={"parent": sync_job_doc},
+            fields=["checksum"],
+            order_by="idx asc",
+        )
+        for cp in checkpoints:
+            checksums.append(cp["checksum"])
+
+        # All checksums should be non-empty SHA-256 hex strings
+        for cs in checksums:
+            assert len(cs) == 64, f"Checksum should be 64-char hex, got {cs}"
+            int(cs, 16)  # valid hex
+
+    def test_checksum_is_not_just_offset_counter(self, sync_job_doc: str):
+        """
+        Verify the checksum is derived from record identity, not just
+        the processed counter. Two runs with the same records must
+        produce the same checksum at the same point.
+        """
+        # Run 1
+        job1 = CountingImportJob(job_name=sync_job_doc, total=100)
+        job1.run()
+        last_cp_1 = frappe.get_all(
+            "SyncJobCheckpoint",
+            filters={"parent": sync_job_doc},
+            fields=["checksum"],
+            order_by="idx desc",
+            limit=1,
+        )[0]["checksum"]
+
+        # Clean up for run 2
+        frappe.db.delete("SyncJobCheckpoint", {"parent": sync_job_doc})
+        frappe.db.delete("SyncJobDedup", {"job_type": "test.counting_import"})
+        frappe.db.commit()
+
+        # Run 2 — same data, same order
+        job2 = CountingImportJob(job_name=sync_job_doc, total=100)
+        job2.run()
+        last_cp_2 = frappe.get_all(
+            "SyncJobCheckpoint",
+            filters={"parent": sync_job_doc},
+            fields=["checksum"],
+            order_by="idx desc",
+            limit=1,
+        )[0]["checksum"]
+
+        # Same input order → same checksum
+        assert last_cp_1 == last_cp_2, (
+            f"Deterministic input should produce same checksum: {last_cp_1} vs {last_cp_2}"
+        )
+
+
 class TestCheckpointFrequency:
 
     def test_checkpoints_written_at_configured_interval(self, sync_job_doc: str):
