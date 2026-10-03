@@ -8,6 +8,8 @@ Tests verify the public API methods exist and have the expected signatures.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import fde_component.api as api_module

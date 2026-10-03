@@ -52,13 +52,31 @@ def run_job(sync_job_name: str, job_type: str, **kwargs: Any) -> None:
     # Frappe enqueue calls this as a method path; frappe.enqueue resolves it.
     # We need frappe.init() etc. — the RQ worker has already done that.
 
-    sync_job = frappe.get_doc("SyncJob", sync_job_name)
-    if sync_job.status in ("Completed", "Dead Lettered"):
-        logger.info("Job %s already finished (status=%s) — skipping", sync_job_name, sync_job.status)
+    # Atomically claim the job: only transition from Queued/Interrupted to Running.
+    # This prevents two workers from running the same job concurrently.
+    frappe.db.sql(
+        """
+        UPDATE `tabSyncJob`
+        SET `status` = 'Running',
+            `started_at` = NOW()
+        WHERE `name` = %s
+          AND `status` IN ('Queued', 'Interrupted')
+        """,
+        (sync_job_name,),
+    )
+    if frappe.db.affected_rows() == 0:
+        sync_job = frappe.get_doc("SyncJob", sync_job_name)
+        logger.info(
+            "Job %s already claimed (status=%s) — skipping",
+            sync_job_name,
+            sync_job.status,
+        )
         return
 
     job_cls = JOB_REGISTRY.get(job_type)
     if job_cls is None:
+        frappe.db.set_value("SyncJob", sync_job_name, {"status": "Failed"})
+        frappe.db.commit()
         raise JobFailed(f"No CheckpointedJob registered for job_type={job_type!r}")
 
     job = job_cls(job_name=sync_job_name, **kwargs)

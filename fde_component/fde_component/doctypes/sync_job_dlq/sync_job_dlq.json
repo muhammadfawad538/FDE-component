@@ -17,6 +17,13 @@
       "in_standard_filter": 1
     },
     {
+      "fieldname": "idempotency_key",
+      "fieldtype": "Data",
+      "label": "Idempotency Key",
+      "length": 64,
+      "in_list_view": 1
+    },
+    {
       "fieldname": "payload",
       "fieldtype": "Small Text",
       "label": "Payload",

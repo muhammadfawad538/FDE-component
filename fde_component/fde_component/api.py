@@ -4,6 +4,8 @@ fde_component.api
 Public API methods callable from the frontend.
 """
 
+import json
+
 import frappe
 from fde_component.jobs.exceptions import JobDeadLettered
 
