@@ -130,33 +130,29 @@ jobs:
           bench --site test.localhost install-app fde_component
 
           # ── Diagnostics: module resolution ──────────────────────────────────────
-          cat > /tmp/diag_module.py << 'PYEOF'
-          import frappe
-          import os
-
-          print('=== Frappe version ===')
-          print(frappe.__version__)
-          print('=== frappe.local.module_app ===')
-          print(frappe.local.module_app)
-          print('=== get_module_app("FDE Component") ===')
-          print(frappe.get_module_app('FDE Component'))
-          print('=== Module Def: FDE Component ===')
-          m = frappe.get_doc('Module Def', 'FDE Component')
-          print('name:', m.name)
-          print('app_name:', m.app_name)
-          print('=== DocType: SyncJob ===')
-          d = frappe.get_doc('DocType', 'SyncJob')
-          print('name:', d.name)
-          print('module:', d.module)
-          print('custom:', d.custom)
-          print('=== fde_component/modules.txt ===')
-          p = os.path.join(frappe.get_app_path('fde_component'), 'modules.txt')
-          if os.path.exists(p):
-              print(open(p).read())
-          else:
-              print('NOT FOUND:', p)
-          PYEOF
-          sed -i 's/^          //' /tmp/diag_module.py
-          bench --site test.localhost execute --args "python /tmp/diag_module.py"
+          printf '%s\n' \
+            "import frappe, os" \
+            "frappe.init(site='test.localhost', sites_path='sites')" \
+            "frappe.connect()" \
+            "print('=== Frappe version ===')" \
+            "print(frappe.__version__)" \
+            "print('=== frappe.local.module_app ===')" \
+            "print(frappe.local.module_app)" \
+            "print('=== get_module_app(\"FDE Component\") ===')" \
+            "print(frappe.get_module_app('FDE Component'))" \
+            "print('=== Module Def: FDE Component ===')" \
+            "m = frappe.get_doc('Module Def', 'FDE Component')" \
+            "print('name:', m.name)" \
+            "print('app_name:', m.app_name)" \
+            "print('=== DocType: SyncJob ===')" \
+            "d = frappe.get_doc('DocType', 'SyncJob')" \
+            "print('name:', d.name)" \
+            "print('module:', d.module)" \
+            "print('custom:', d.custom)" \
+            "print('=== fde_component/modules.txt ===')" \
+            "p = os.path.join(frappe.get_app_path('fde_component'), 'modules.txt')" \
+            "print(open(p).read() if os.path.exists(p) else 'NOT FOUND: ' + p)" \
+            > /tmp/diag_module.py
+          env/bin/python /tmp/diag_module.py
 
           bench --site test.localhost run-tests --app fde_component
