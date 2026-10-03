@@ -64,6 +64,7 @@ jobs:
 
           cd $GITHUB_WORKSPACE
           pip install -q -e fde_bench/apps/frappe
+          fde_bench/env/bin/python -m pip install -q whoosh
 
           # Diagnostics: show installed Click and bench versions
           python3 -c "import click; print('Click version:', click.__version__)"
