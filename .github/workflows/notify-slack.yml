@@ -1,0 +1,62 @@
+name: Notify Slack on Push
+
+on:
+  push:
+    branches:
+      - '**'
+
+# Least privilege: this job only ever calls an external webhook, it never
+# touches the GitHub API, so the default GITHUB_TOKEN gets no permissions
+# beyond read access to repo contents (checkout isn't even used here).
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Send Slack notification
+        env:
+          # Untrusted values reach the shell as environment variables, never as
+          # ${{ }} interpolated into the script text. Actions substitutes ${{ }}
+          # *before* bash parses the line, so a commit message containing a
+          # newline, a quote, a backtick or $( ) would otherwise run as shell
+          # instead of being sent as inert data.
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          REPOSITORY: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          REF_NAME: ${{ github.ref_name }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL is not set; skipping notification." >&2
+            exit 0
+          fi
+
+          # Belt-and-suspenders: GitHub auto-masks secret values in logs, but
+          # explicitly masking means the webhook can never leak even if a
+          # future edit to this script accidentally echoes it.
+          echo "::add-mask::${SLACK_WEBHOOK_URL}"
+
+          # Only the first line, so a long commit body cannot flood the channel.
+          subject=$(printf '%s' "$COMMIT_MESSAGE" | head -n 1)
+
+          # jq builds the JSON, so quotes and control characters in the subject
+          # are escaped properly instead of breaking the payload.
+          payload=$(jq -n \
+            --arg repo "$REPOSITORY" \
+            --arg actor "$ACTOR" \
+            --arg ref "$REF_NAME" \
+            --arg url "$COMMIT_URL" \
+            --arg subject "$subject" \
+            '{text: "📦 *\($repo)*\nPushed by *\($actor)* to `\($ref)`\n<\($url)|\($subject)>"}')
+
+          curl --fail-with-body --silent --show-error \
+            --max-time 10 \
+            -X POST -H 'Content-type: application/json' \
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"
