@@ -120,6 +120,8 @@ jobs:
             sleep 2
           done
 
+          mkdir -p logs
+
           cd fde_bench
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
 
