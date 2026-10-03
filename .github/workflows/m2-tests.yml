@@ -156,6 +156,6 @@ if os.path.exists(p):
 else:
     print('NOT FOUND:', p)
 PYEOF
-          env/bin/python /tmp/diag_module.py
+          bench --site test.localhost execute --args "python /tmp/diag_module.py"
 
           bench --site test.localhost run-tests --app fde_component
