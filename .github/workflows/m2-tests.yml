@@ -72,6 +72,10 @@ jobs:
 
           cp -r fde_component fde_bench/apps/fde_component
 
+          # Ensure modules.txt has correct LF line endings (Windows Git
+          # may convert to CRLF, which Frappe cannot parse)
+          printf 'fde_component\tFDE Component\n' > fde_bench/apps/fde_component/modules.txt
+
           # Make fde_component importable in the bench Python environment
           fde_bench/env/bin/python -m pip install -e fde_bench/apps/fde_component
 
