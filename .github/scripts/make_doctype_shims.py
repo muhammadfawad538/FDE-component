@@ -2,10 +2,13 @@
 CI-only: build doctype shim packages so Frappe's load_doctype_module()
 can resolve scrub(DocType.name) to the correct folder/file.
 
+Frappe imports fde_component.fde_component.doctype.<scrub>.<scrub>, so
+the shim must live under <pkg>/fde_component/doctype/, NOT <pkg>/doctype/.
+
 Example: DocType "SyncJob" has folder sync_job/ but Frappe scrubs it
 to "syncjob". This script creates:
-    fde_component/doctype/syncjob/__init__.py
-    fde_component/doctype/syncjob/syncjob.py
+    fde_component/fde_component/doctype/syncjob/__init__.py
+    fde_component/fde_component/doctype/syncjob/syncjob.py
 
 If sync_job/sync_job.py exists, the shim re-exports from it.
 Otherwise the shim provides a plain Document fallback.
@@ -36,19 +39,31 @@ def make_shims(pkg_root: str) -> None:
         Path to the *app package* directory, e.g.
         fde_bench/apps/fde_component/fde_component
     """
-    doctypes_dir = os.path.join(pkg_root, "doctypes")
-    doctype_dir = os.path.join(pkg_root, "doctype")
+    MODULE_DIR = os.path.join(pkg_root, "fde_component")
+    DOCTYPE_DIR = os.path.join(MODULE_DIR, "doctype")
+    DOCTYPES_DIR = os.path.join(pkg_root, "doctypes")
 
-    # Ensure doctype/ is a real directory (not a symlink to doctypes/)
-    if os.path.islink(doctype_dir):
-        os.remove(doctype_dir)
-        os.makedirs(doctype_dir, exist_ok=True)
+    # If DOCTYPE_DIR is a symlink (from earlier workflow step), remove it
+    if os.path.lexists(DOCTYPE_DIR) and os.path.islink(DOCTYPE_DIR):
+        os.unlink(DOCTYPE_DIR)
 
-    # Ensure __init__.py exists in doctypes/
-    open(os.path.join(doctypes_dir, "__init__.py"), "a").close()
+    # Create DOCTYPE_DIR as a real directory
+    os.makedirs(DOCTYPE_DIR, exist_ok=True)
+    open(os.path.join(DOCTYPE_DIR, "__init__.py"), "a").close()
 
-    for folder in sorted(os.listdir(doctypes_dir)):
-        folder_path = os.path.join(doctypes_dir, folder)
+    # Ensure MODULE_DIR/__init__.py exists
+    open(os.path.join(MODULE_DIR, "__init__.py"), "a").close()
+
+    # Ensure MODULE_DIR/doctypes symlink exists (for hooks.py imports)
+    doctypes_link = os.path.join(MODULE_DIR, "doctypes")
+    if not os.path.lexists(doctypes_link):
+        os.symlink("../doctypes", doctypes_link)
+
+    # Ensure __init__.py in DOCTYPES_DIR
+    open(os.path.join(DOCTYPES_DIR, "__init__.py"), "a").close()
+
+    for folder in sorted(os.listdir(DOCTYPES_DIR)):
+        folder_path = os.path.join(DOCTYPES_DIR, folder)
         if not os.path.isdir(folder_path):
             continue
 
@@ -59,26 +74,25 @@ def make_shims(pkg_root: str) -> None:
         # Ensure __init__.py in the folder
         open(os.path.join(folder_path, "__init__.py"), "a").close()
 
-        # Symlink doctype/<folder> -> ../doctypes/<folder> so sync still finds JSON
-        symlink_path = os.path.join(doctype_dir, folder)
-        if os.path.islink(symlink_path):
-            os.remove(symlink_path)
-        if not os.path.exists(symlink_path):
-            os.symlink(f"../doctypes/{folder}", symlink_path)
+        # Symlink DOCTYPE_DIR/<folder> -> <pkg_root>/doctypes/<folder>
+        # Relative from DOCTYPE_DIR: ../../doctypes/<folder>
+        symlink_path = os.path.join(DOCTYPE_DIR, folder)
+        symlink_target = os.path.join("..", "..", "doctypes", folder)
+        if os.path.lexists(symlink_path):
+            os.unlink(symlink_path)
+        os.symlink(symlink_target, symlink_path)
 
-        # Build shim path: doctype/<scrub>/
+        # Build shim path: DOCTYPE_DIR/<scrub>/
         with open(json_path) as fh:
             data = json.load(fh)
         doc_name = data.get("name", "")
         s = scrub(doc_name)
 
         if s == folder:
-            # Folder name already matches scrubbed DocType name — no shim needed
             continue
 
-        shim_dir = os.path.join(doctype_dir, s)
-        if os.path.exists(shim_dir):
-            # Already exists (e.g. from a previous run) — skip
+        shim_dir = os.path.join(DOCTYPE_DIR, s)
+        if os.path.lexists(shim_dir):
             continue
 
         os.makedirs(shim_dir, exist_ok=True)
@@ -88,7 +102,6 @@ def make_shims(pkg_root: str) -> None:
         real_py = os.path.join(folder_path, f"{folder}.py")
 
         if os.path.isfile(real_py):
-            # Re-export from the real module
             with open(py_file, "w") as fh:
                 fh.write(
                     f"from fde_component.fde_component.doctypes.{folder}.{folder} "  # noqa: E501
@@ -98,7 +111,6 @@ def make_shims(pkg_root: str) -> None:
                 )
             print(f"SHIM  {doc_name:25s}  scrub={s:20s}  folder={folder}  -> {py_file}")
         else:
-            # No real .py — fall back to a plain Document subclass
             pascal = pascal_case(folder)
             with open(py_file, "w") as fh:
                 fh.write(
