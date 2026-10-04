@@ -29,9 +29,13 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq python3-dev mariadb-server mariadb-client redis-server
+          sudo apt-get install -y -qq python3-dev mariadb-server mariadb-client redis-server redis-tools
           sudo service mariadb start 2>/dev/null || sudo mysqld --user=root --datadir=/var/lib/mysql &
           sudo service redis-server start 2>/dev/null || sudo redis-server --daemonize yes
+          # Extra redis instances for bench queue/cache
+          redis-server --port 11000 --daemonize yes
+          redis-server --port 13000 --daemonize yes
+          redis-cli -p 11000 ping
           sleep 5
           sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'test'; FLUSH PRIVILEGES;" 2>/dev/null || true
 

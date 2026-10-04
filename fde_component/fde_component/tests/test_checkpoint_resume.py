@@ -105,7 +105,7 @@ class TestKillAndResume(CheckpointTestCase):
             original_iter = job.iter_records
             call_count = [0]
 
-            def kill_at_halfway(offset: int) -> Generator[dict[str, Any], None, None]:
+            def kill_at_halfway(offset: int, redrive_key=None):
                 for record in original_iter(offset):
                     call_count[0] += 1
                     if call_count[0] > KILL_AT:

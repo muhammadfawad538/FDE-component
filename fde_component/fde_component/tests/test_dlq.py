@@ -31,6 +31,10 @@ class FailingJob(CheckpointedJob):
     checkpoint_every = 50
     checkpoint_seconds = 5.0
 
+    def __init__(self, job_name: str, total: int = TOTAL_RECORDS, **kwargs):
+        super().__init__(job_name, **kwargs)
+        self._total = total
+
     def iter_records(self, offset: int, redrive_key: str | None = None):
         for i in range(offset, self._total):
             yield {"id": f"record-{i}", "index": i}
