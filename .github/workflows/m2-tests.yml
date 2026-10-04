@@ -14,6 +14,10 @@ jobs:
         image: redis:7-alpine
         ports: ["6379:6379"]
 
+    env:
+      BENCH_DIR: ${{ github.workspace }}/fde_bench
+      PY: ${{ github.workspace }}/fde_bench/env/bin/python
+
     steps:
       - uses: actions/checkout@v4
 
@@ -39,8 +43,6 @@ jobs:
       - name: Set up bench
         run: |
           set -euo pipefail
-          BENCH_DIR="$GITHUB_WORKSPACE/fde_bench"
-          PY="$BENCH_DIR/env/bin/python"
           pip install -q "frappe-bench==5.31.0"
           bench init --skip-redis-config-generation "$BENCH_DIR"
           rm -rf "$BENCH_DIR/apps/frappe"
@@ -75,28 +77,26 @@ jobs:
 
           mkdir -p "$BENCH_DIR/sites" "$BENCH_DIR/logs" "$BENCH_DIR/sites/test.localhost/logs"
           printf "frappe\nfde_component\n" > "$BENCH_DIR/sites/apps.txt"
-          "$BENCH_DIR/env/bin/bench" new-site test.localhost --mariadb-root-password test --admin-password admin --force
+          bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
 
           # Pre-install import checks — surface path errors before install-app
           "$PY" "$GITHUB_WORKSPACE/.github/scripts/check_imports.py"
 
-          "$BENCH_DIR/env/bin/bench" --site test.localhost install-app fde_component
+          bench --site test.localhost install-app fde_component
 
       - name: Debug and conditionally migrate
         run: |
-          BENCH_DIR="$GITHUB_WORKSPACE/fde_bench"
           cat -A "$BENCH_DIR/apps/fde_component/fde_component/modules.txt"
           ls -laR "$BENCH_DIR/apps/fde_component/fde_component/fde_component"
-          EXISTS=$("$BENCH_DIR/env/bin/bench" --site test.localhost execute frappe.db.exists --args "['DocType','SyncJob']")
+          EXISTS=$(bench --site test.localhost execute frappe.db.exists --args "['DocType','SyncJob']")
           echo "SyncJob exists: $EXISTS"
           if [ "$EXISTS" != "1" ] && [ "$EXISTS" != "True" ]; then
             echo "SyncJob missing - running migrate"
-            "$BENCH_DIR/env/bin/bench" --site test.localhost migrate
+            bench --site test.localhost migrate
           else
             echo "SyncJob present - skipping migrate"
           fi
 
       - name: Run tests
         run: |
-          BENCH_DIR="$GITHUB_WORKSPACE/fde_bench"
-          "$BENCH_DIR/env/bin/bench" --site test.localhost run-tests --app fde_component
+          bench --site test.localhost run-tests --app fde_component
