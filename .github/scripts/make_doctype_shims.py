@@ -104,10 +104,16 @@ def make_shims(pkg_root: str) -> None:
         if os.path.isfile(real_py):
             with open(py_file, "w") as fh:
                 fh.write(
+                    f"import importlib as _il\n"
+                    f"_real = _il.import_module(\n"
+                    f"    \"fde_component.fde_component.doctypes.{folder}.{folder}\"\n"
+                    f")\n"
                     f"from fde_component.fde_component.doctypes.{folder}.{folder} "  # noqa: E501
                     f"import *  # noqa: F401,F403\n"
-                    f"from fde_component.fde_component.doctypes.{folder}.{folder} "  # noqa: E501
-                    f"import {folder}  # noqa: F401\n"
+                    f"\n"
+                    f"\n"
+                    f"def __getattr__(name):\n"
+                    f"    return getattr(_real, name)\n"
                 )
             print(f"SHIM  {doc_name:25s}  scrub={s:20s}  folder={folder}  -> {py_file}")
         else:

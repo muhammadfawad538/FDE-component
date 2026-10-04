@@ -64,8 +64,14 @@ def main() -> None:
             data = json.load(fh)
         s = scrub(data.get("name", ""))
 
-        # Real path
-        try_import(f"fde_component.fde_component.doctypes.{folder}.{folder}")
+        real_py = os.path.join(pkg_root, "doctypes", folder, f"{folder}.py")
+
+        # Real path — skip with a note if no real .py exists
+        if os.path.isfile(real_py):
+            try_import(f"fde_component.fde_component.doctypes.{folder}.{folder}")
+        else:
+            print(f"SKIP (no real .py)  fde_component.fde_component.doctypes.{folder}.{folder}")
+
         # Shim path (only if scrub differs from folder)
         if s != folder:
             try_import(f"fde_component.fde_component.doctype.{s}.{s}")
