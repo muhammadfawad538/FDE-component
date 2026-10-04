@@ -170,4 +170,31 @@ jobs:
             > /tmp/diag_module.py
           cd fde_bench && env/bin/python /tmp/diag_module.py
 
+          # ── Ensure Module Def maps SyncJob to fde_component ─────────────────────
+          # Frappe uses Module Def records (not just modules.txt) to resolve
+          # which app owns a DocType. If the Module Def is missing or wrong,
+          # controllers resolve to the "Core" module and fail.
+          cd fde_bench && env/bin/python -c "
+import frappe
+frappe.init(site='test.localhost', sites_path='sites')
+frappe.connect()
+if not frappe.db.exists('Module Def', 'FDE Component'):
+    frappe.get_doc({
+        'doctype': 'Module Def',
+        'module_name': 'FDE Component',
+        'app_name': 'fde_component',
+    }).insert(ignore_permissions=True)
+    frappe.db.commit()
+    print('Created Module Def: FDE Component -> fde_component')
+else:
+    m = frappe.get_doc('Module Def', 'FDE Component')
+    if m.app_name != 'fde_component':
+        m.app_name = 'fde_component'
+        m.save(ignore_permissions=True)
+        frappe.db.commit()
+        print('Updated Module Def app_name to fde_component')
+    else:
+        print('Module Def already correct')
+"
+
           bench --site test.localhost run-tests --app fde_component
