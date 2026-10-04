@@ -358,7 +358,9 @@ class CheckpointedJob:
             frappe.db.commit()
         except Exception:
             frappe.db.rollback()
-            logger.exception("Job %s failed to save checkpoint at offset %d", self.job_name, offset)
+            tb = frappe.get_traceback()
+            frappe.log_error(title="save_checkpoint failed", message=tb)
+            print(tb)  # temporary, remove after diagnosis
 
     # ── DLQ write (called by retry_dlq, never by job code directly) ────────
 
@@ -387,8 +389,10 @@ class CheckpointedJob:
             frappe.db.commit()
         except Exception:
             frappe.db.rollback()
-            logger.exception("Job %s failed to write DLQ entry", self.job_name)
-            raise  # re-raise — caller must know the DLQ write failed
+            tb = frappe.get_traceback()
+            frappe.log_error(title="_write_dlq failed", message=tb)
+            print(tb)  # temporary, remove after diagnosis
+            raise
 
     # ── Signal handling ────────────────────────────────────────────────────
 
