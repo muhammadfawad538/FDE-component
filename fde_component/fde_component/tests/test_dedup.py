@@ -8,6 +8,7 @@ These run with plain pytest.
 from __future__ import annotations
 
 import hashlib
+import unittest
 
 import pytest
 
