@@ -51,20 +51,8 @@ jobs:
           printf 'FDE Component\n' > fde_bench/apps/fde_component/modules.txt
           fde_bench/env/bin/python -m pip install -e fde_bench/apps/fde_component
 
-          # Python 3.14 compatibility patch - write script to file
-          printf '%s\n' \
-            "p = 'fde_bench/apps/frappe/frappe/utils/__init__.py'" \
-            "with open(p) as f:" \
-            "    lines = f.readlines()" \
-            "for i, line in enumerate(lines):" \
-            "    if line.strip() == 'if key in v:'" \
-            "        indent = line[:len(line) - len(line.lstrip())]" \
-            "        lines[i] = indent + 'if hasattr(v, \"__contains__\") and key in v:\n'" \
-            "        break" \
-            "with open(p, 'w') as f:" \
-            "    f.writelines(lines)" \
-            > /tmp/py314_patch.py
-          python3 /tmp/py314_patch.py
+          # Python 3.14 compatibility patch
+          python3 "$GITHUB_WORKSPACE/.github/scripts/py314_patch.py"
 
           for i in $(seq 1 30); do
             mysqladmin ping -h 127.0.0.1 -u root -ptest --silent && break
