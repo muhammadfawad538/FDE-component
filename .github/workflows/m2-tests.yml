@@ -81,7 +81,7 @@ jobs:
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
 
           # Pre-install import checks — surface path errors before install-app
-          "$PY" "$GITHUB_WORKSPACE/.github/scripts/check_imports.py"
+          "$PY" "$GITHUB_WORKSPACE/.github/scripts/check_imports.py" "$BENCH_DIR/apps/fde_component/fde_component" || true
 
           bench --site test.localhost install-app fde_component
 

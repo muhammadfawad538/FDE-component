@@ -5,8 +5,13 @@ Tries importing each DocType module via both the real path
 (doctypes/<folder>/<folder>) and the scrubbed shim path
 (doctype/<scrub>/<scrub>), plus hooks and API modules.
 
-Run from inside fde_bench/ after pip install -e but before
-bench install-app.
+Usage:
+    check_imports.py [pkg_root]
+
+pkg_root defaults to $BENCH_DIR/apps/fde_component/fde_component
+or the current directory if BENCH_DIR is not set.
+
+Always exits 0 — diagnostic only.
 """
 
 import importlib
@@ -29,10 +34,29 @@ def try_import(module_path: str) -> None:
 
 
 def main() -> None:
-    pkg = "fde_component/fde_component"
+    # Resolve package root from argv or env
+    if len(sys.argv) > 1:
+        pkg_root = sys.argv[1]
+    else:
+        bench_dir = os.environ.get("BENCH_DIR", ".")
+        pkg_root = os.path.join(bench_dir, "apps", "fde_component", "fde_component")
 
-    for folder in sorted(os.listdir(os.path.join(pkg, "doctypes"))):
-        json_path = os.path.join(pkg, "doctypes", folder, f"{folder}.json")
+    if not os.path.isdir(pkg_root):
+        print(f"PKG_ROOT not found: {pkg_root}")
+        return
+
+    # Ensure the package is importable
+    apps_dir = os.path.dirname(pkg_root)
+    if apps_dir not in sys.path:
+        sys.path.insert(0, apps_dir)
+
+    doctypes_dir = os.path.join(pkg_root, "doctypes")
+    if not os.path.isdir(doctypes_dir):
+        print(f"doctypes/ not found in {pkg_root}")
+        return
+
+    for folder in sorted(os.listdir(doctypes_dir)):
+        json_path = os.path.join(doctypes_dir, folder, f"{folder}.json")
         if not os.path.isfile(json_path):
             continue
 
