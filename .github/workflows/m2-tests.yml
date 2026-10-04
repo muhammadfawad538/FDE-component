@@ -79,6 +79,9 @@ jobs:
           # Make fde_component importable in the bench Python environment
           fde_bench/env/bin/python -m pip install -e fde_bench/apps/fde_component
 
+          # Add .pth file so Python can always find fde_component
+          echo "$(pwd)/apps/fde_component" > fde_bench/env/lib/python3.14/site-packages/fde_component.pth
+
           # Verify import works
           fde_bench/env/bin/python -c "import fde_component; print('OK:', fde_component.__file__)"
 
