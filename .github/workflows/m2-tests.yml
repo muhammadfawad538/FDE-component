@@ -75,8 +75,9 @@ jobs:
             sleep 2
           done
 
-          mkdir -p "$BENCH_DIR/sites" "$BENCH_DIR/logs" "$BENCH_DIR/sites/test.localhost/logs"
-          printf "frappe\nfde_component\n" > "$BENCH_DIR/sites/apps.txt"
+          cd "$BENCH_DIR"
+          mkdir -p sites logs test.localhost/logs
+          printf "frappe\nfde_component\n" > sites/apps.txt
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
 
           # Pre-install import checks — surface path errors before install-app
@@ -86,8 +87,9 @@ jobs:
 
       - name: Debug and conditionally migrate
         run: |
-          cat -A "$BENCH_DIR/apps/fde_component/fde_component/modules.txt"
-          ls -laR "$BENCH_DIR/apps/fde_component/fde_component/fde_component"
+          cd "$BENCH_DIR"
+          cat -A apps/fde_component/fde_component/modules.txt
+          ls -laR apps/fde_component/fde_component/fde_component
           EXISTS=$(bench --site test.localhost execute frappe.db.exists --args "['DocType','SyncJob']")
           echo "SyncJob exists: $EXISTS"
           if [ "$EXISTS" != "1" ] && [ "$EXISTS" != "True" ]; then
@@ -99,4 +101,5 @@ jobs:
 
       - name: Run tests
         run: |
+          cd "$BENCH_DIR"
           bench --site test.localhost run-tests --app fde_component
