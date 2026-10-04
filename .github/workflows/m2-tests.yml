@@ -85,19 +85,22 @@ jobs:
 
           bench --site test.localhost install-app fde_component
 
-      - name: Debug and conditionally migrate
+      - name: Debug and verify DocTypes
         run: |
           cd "$BENCH_DIR"
           cat -A apps/fde_component/fde_component/modules.txt
           ls -laR apps/fde_component/fde_component/fde_component
-          EXISTS=$(bench --site test.localhost execute frappe.db.exists --args "['DocType','SyncJob']")
-          echo "SyncJob exists: $EXISTS"
-          if [ "$EXISTS" != "1" ] && [ "$EXISTS" != "True" ]; then
-            echo "SyncJob missing - running migrate"
-            bench --site test.localhost migrate
-          else
-            echo "SyncJob present - skipping migrate"
-          fi
+
+          for DT in SyncJob SyncJobDedup SyncJobDLQ SyncSchedule; do
+            EXISTS=$(bench --site test.localhost execute frappe.db.exists --args "['DocType','$DT']")
+            echo "$DT exists: $EXISTS"
+            if [ -z "$EXISTS" ] || echo "$EXISTS" | grep -qiE '^(none|null|false|0)$'; then
+              echo "$DT MISSING"
+              exit 1
+            else
+              echo "$DT present"
+            fi
+          done
 
       - name: Run tests
         run: |
