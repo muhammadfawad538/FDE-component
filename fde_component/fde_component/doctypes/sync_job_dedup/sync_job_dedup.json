@@ -61,7 +61,8 @@
       "fieldname": "section_break_1",
       "fieldtype": "Section Break",
       "label": "Re-drive"
-    },
+    }
+  ],
   "sort_field": "first_seen",
   "sort_order": "DESC",
   "autoname": "DEDUP-.#####",
