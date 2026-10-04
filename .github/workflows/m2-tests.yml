@@ -54,8 +54,12 @@ jobs:
           PKG=fde_bench/apps/fde_component/fde_component
           mkdir -p "$PKG/fde_component"
           touch "$PKG/fde_component/__init__.py"
-          ln -s ../doctypes "$PKG/fde_component/doctype"
           ln -s ../doctypes "$PKG/fde_component/doctypes"
+
+          # Build doctype/ as a real directory with shims for scrubbed names
+          # and symlinks so Frappe's sync still finds the JSON files.
+          PKG=fde_bench/apps/fde_component/fde_component
+          python3 "$GITHUB_WORKSPACE/.github/scripts/make_doctype_shims.py" "$PKG"
 
           fde_bench/env/bin/python -m pip install -q -e fde_bench/apps/fde_component
 
@@ -72,8 +76,8 @@ jobs:
           printf "frappe\nfde_component\n" > sites/apps.txt
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
 
-          # Pre-install import check — surface path errors before install-app
-          fde_bench/env/bin/python -c "import fde_component.fde_component.doctypes.sync_job.sync_job" 2>&1 || true
+          # Pre-install import checks — surface path errors before install-app
+          fde_bench/env/bin/python "$GITHUB_WORKSPACE/.github/scripts/check_imports.py"
 
           bench --site test.localhost install-app fde_component
 
