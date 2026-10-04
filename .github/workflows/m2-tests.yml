@@ -39,78 +39,57 @@ jobs:
       - name: Set up bench
         run: |
           set -euo pipefail
-
           pip install -q "frappe-bench==5.31.0"
           bench init --skip-redis-config-generation fde_bench
-
           rm -rf fde_bench/apps/frappe
           git clone https://github.com/frappe/frappe.git fde_bench/apps/frappe
           cd fde_bench/apps/frappe && git checkout 012667b9c4e7f66d5e1ff5858d2e922331d4300a
-
           cd "$GITHUB_WORKSPACE"
           pip install -q -e fde_bench/apps/frappe
           fde_bench/env/bin/python -m pip install -q whoosh pytest
-
           cp -r fde_component fde_bench/apps/fde_component
-
-          # Write modules.txt with correct format (one module name per line)
           printf 'FDE Component\n' > fde_bench/apps/fde_component/modules.txt
-
-          # Install fde_component into bench env
           fde_bench/env/bin/python -m pip install -e fde_bench/apps/fde_component
 
-          # Python 3.14 compatibility patch
-          python3 -c "
-import sys
-p = 'fde_bench/apps/frappe/frappe/utils/__init__.py'
-with open(p) as f:
-    lines = f.readlines()
-for i, line in enumerate(lines):
-    if line.strip() == 'if key in v:':
-        indent = line[:len(line) - len(line.lstrip())]
-        lines[i] = indent + 'if hasattr(v, \"__contains__\") and key in v:\n'
-        break
-with open(p, 'w') as f:
-    f.writelines(lines)
-"
+          # Python 3.14 compatibility patch - write script to file
+          printf '%s\n' \
+            "p = 'fde_bench/apps/frappe/frappe/utils/__init__.py'" \
+            "with open(p) as f:" \
+            "    lines = f.readlines()" \
+            "for i, line in enumerate(lines):" \
+            "    if line.strip() == 'if key in v:'" \
+            "        indent = line[:len(line) - len(line.lstrip())]" \
+            "        lines[i] = indent + 'if hasattr(v, \"__contains__\") and key in v:\n'" \
+            "        break" \
+            "with open(p, 'w') as f:" \
+            "    f.writelines(lines)" \
+            > /tmp/py314_patch.py
+          python3 /tmp/py314_patch.py
 
-          # Wait for MariaDB
           for i in $(seq 1 30); do
             mysqladmin ping -h 127.0.0.1 -u root -ptest --silent && break
             sleep 2
           done
 
           cd fde_bench
-
-          # Register apps BEFORE new-site
           mkdir -p sites logs test.localhost/logs
           printf "frappe\nfde_component\n" > sites/apps.txt
-
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
-
           bench --site test.localhost install-app fde_component
 
-          # Fix: ensure DocTypes have correct module and Module Def exists
-          env/bin/python -c "
-import frappe
-frappe.init(site='test.localhost', sites_path='sites')
-frappe.connect()
+          # Fix module resolution - write script to file
+          printf '%s\n' \
+            "import frappe" \
+            "frappe.init(site='test.localhost', sites_path='sites')" \
+            "frappe.connect()" \
+            "if not frappe.db.exists('Module Def', 'FDE Component'):" \
+            "    frappe.get_doc({'doctype': 'Module Def', 'module_name': 'FDE Component', 'app_name': 'fde_component'}).insert(ignore_permissions=True)" \
+            "    frappe.db.commit()" \
+            "for dt in ['SyncJob', 'SyncJobDedup', 'SyncJobDLQ', 'SyncJobCheckpoint', 'SyncSchedule']:" \
+            "    if frappe.db.exists('DocType', dt):" \
+            "        frappe.db.set_value('DocType', dt, 'module', 'FDE Component')" \
+            "frappe.db.commit()" \
+            > /tmp/fix_module.py
+          env/bin/python /tmp/fix_module.py
 
-# Create Module Def if missing
-if not frappe.db.exists('Module Def', 'FDE Component'):
-    frappe.get_doc({'doctype': 'Module Def', 'module_name': 'FDE Component', 'app_name': 'fde_component'}).insert(ignore_permissions=True)
-    frappe.db.commit()
-    print('Created Module Def')
-else:
-    print('Module Def exists')
-
-# Fix module field on DocTypes that may have wrong value
-for dt in ['SyncJob', 'SyncJobDedup', 'SyncJobDLQ', 'SyncJobCheckpoint', 'SyncSchedule']:
-    if frappe.db.exists('DocType', dt):
-        frappe.db.set_value('DocType', dt, 'module', 'FDE Component')
-        print(f'Fixed module for {dt}')
-frappe.db.commit()
-"
-
-          # Run tests
           bench --site test.localhost run-tests --app fde_component
