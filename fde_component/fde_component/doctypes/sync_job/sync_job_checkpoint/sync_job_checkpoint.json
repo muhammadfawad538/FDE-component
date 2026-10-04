@@ -1,6 +1,6 @@
 {
   "name": "SyncJobCheckpoint",
-  "module": "FDE Component",
+  "module": "fde_component",
   "doctype": "DocType",
   "istable": 1,
   "istree": 0,

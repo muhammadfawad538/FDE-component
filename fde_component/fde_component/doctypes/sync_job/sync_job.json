@@ -1,6 +1,6 @@
 {
   "name": "SyncJob",
-  "module": "FDE Component",
+  "module": "fde_component",
   "doctype": "DocType",
   "istable": 0,
   "istree": 0,
