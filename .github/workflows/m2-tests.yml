@@ -73,7 +73,10 @@ jobs:
           cp -r fde_component fde_bench/apps/fde_component
 
           # Make fde_component importable in the bench Python environment
-          fde_bench/env/bin/python -m pip install -q -e fde_bench/apps/fde_component
+          fde_bench/env/bin/python -m pip install -e fde_bench/apps/fde_component
+
+          # Verify import works
+          fde_bench/env/bin/python -c "import fde_component; print('OK:', fde_component.__file__)"
 
           echo "=== Python ==="
           python3 --version
@@ -121,6 +124,7 @@ jobs:
           done
 
           cd fde_bench
+          export PYTHONPATH="${PYTHONPATH:-}:$(pwd)/apps/fde_component:$(pwd)/apps/frappe"
           mkdir -p logs test.localhost/logs
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
 
