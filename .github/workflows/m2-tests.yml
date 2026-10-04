@@ -60,12 +60,13 @@ jobs:
           touch "$PKG/fde_component/__init__.py"
           ln -s ../doctypes "$PKG/fde_component/doctypes"
 
-          # CI workaround: hooks.override_doctype_class references a class
-          # (SyncJob) that does not exist in the real module. The shim script
-          # injects a stub class into the CI copy so Frappe's import_controller
-          # can find it. This is a real bug in the repo's app code.
-          # Build doctype/ as a real directory with shims for scrubbed names
-          # and symlinks so Frappe's sync still finds the JSON files.
+          # CI workaround: the repo nests SyncJobCheckpoint under
+          # doctypes/sync_job/sync_job_checkpoint/, which Frappe's install-app
+          # never discovers (it only syncs top-level folders). This is a real
+          # defect to fix later. The shim script creates a top-level symlink
+          # in the CI copy so the child table DocType exists on the site.
+          # Also: hooks.override_doctype_class references SyncJob class that
+          # does not exist in the real module; the shim script injects a stub.
           PKG="$BENCH_DIR/apps/fde_component/fde_component"
           python3 "$GITHUB_WORKSPACE/.github/scripts/make_doctype_shims.py" "$PKG"
 

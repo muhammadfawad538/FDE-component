@@ -13,6 +13,10 @@ to "syncjob". This script creates:
 If sync_job/sync_job.py exists, the shim re-exports from it.
 Otherwise the shim provides a plain Document fallback.
 
+Also handles nested DocType folders (e.g. doctypes/sync_job/sync_job_checkpoint/)
+by creating a top-level symlink in the CI copy, since Frappe's install-app
+only discovers DocTypes at the top level of doctypes/.
+
 Runs against the CI copy only (never touches the repo).
 """
 
@@ -71,6 +75,41 @@ def inject_class_if_missing(py_path: str, class_name: str) -> bool:
     return True
 
 
+def find_nested_doctypes(doctypes_dir: str) -> list[dict]:
+    """
+    Recursively scan <doctypes_dir> for DocType folders that are NOT
+    at the top level. Returns a list of dicts with keys:
+        folder, folder_path, json_path, doc_name
+    """
+    results = []
+    for root, dirs, files in os.walk(doctypes_dir):
+        # Skip the top-level doctypes/ directory itself
+        if root == doctypes_dir:
+            continue
+        # Only consider direct children of doctypes/ as top-level
+        rel = os.path.relpath(root, doctypes_dir)
+        if os.sep in rel or "/" in rel:
+            # This is nested (e.g. sync_job/sync_job_checkpoint)
+            folder = os.path.basename(root)
+            json_path = os.path.join(root, f"{folder}.json")
+            if os.path.isfile(json_path):
+                try:
+                    with open(json_path) as fh:
+                        data = json.load(fh)
+                    if data.get("doctype") == "DocType":
+                        results.append(
+                            {
+                                "folder": folder,
+                                "folder_path": root,
+                                "json_path": json_path,
+                                "doc_name": data.get("name", folder),
+                            }
+                        )
+                except Exception:
+                    pass
+    return results
+
+
 def make_shims(pkg_root: str) -> None:
     """
     Parameters
@@ -102,6 +141,23 @@ def make_shims(pkg_root: str) -> None:
     # Ensure __init__.py in DOCTYPES_DIR
     open(os.path.join(DOCTYPES_DIR, "__init__.py"), "a").close()
 
+    # ── Step 1: find nested DocTypes and create top-level symlinks ──────────
+    nested = find_nested_doctypes(DOCTYPES_DIR)
+    for item in nested:
+        folder = item["folder"]
+        folder_path = item["folder_path"]
+        # Compute relative path from DOCTYPES_DIR to the nested folder
+        rel_target = os.path.relpath(folder_path, DOCTYPES_DIR)
+        link_path = os.path.join(DOCTYPES_DIR, folder)
+        if os.path.lexists(link_path):
+            continue
+        os.symlink(rel_target, link_path)
+        # Ensure __init__.py in the linked folder (CI copy only)
+        open(os.path.join(folder_path, "__init__.py"), "a").close()
+        print(f"NESTED DOCTYPE linked: {folder} -> {rel_target}")
+
+    # ── Step 2: process all DocTypes (top-level + newly linked) ────────────
+    found = []
     for folder in sorted(os.listdir(DOCTYPES_DIR)):
         folder_path = os.path.join(DOCTYPES_DIR, folder)
         if not os.path.isdir(folder_path):
@@ -114,18 +170,20 @@ def make_shims(pkg_root: str) -> None:
         # Ensure __init__.py in the folder
         open(os.path.join(folder_path, "__init__.py"), "a").close()
 
-        # Symlink DOCTYPE_DIR/<folder> -> <pkg_root>/doctypes/<folder>
-        # Relative from DOCTYPE_DIR: ../../doctypes/<folder>
-        symlink_path = os.path.join(DOCTYPE_DIR, folder)
-        symlink_target = os.path.join("..", "..", "doctypes", folder)
-        if os.path.lexists(symlink_path):
-            os.unlink(symlink_path)
-        os.symlink(symlink_target, symlink_path)
-
-        # Build shim path: DOCTYPE_DIR/<scrub>/
         with open(json_path) as fh:
             data = json.load(fh)
         doc_name = data.get("name", "")
+        found.append(f"{folder} ({doc_name})")
+
+        # Symlink DOCTYPE_DIR/<folder> -> <pkg_root>/doctypes/<folder>
+        # Relative from DOCTYPE_DIR: ../<folder> or ../../<folder>
+        rel_to_doctype = os.path.relpath(folder_path, DOCTYPE_DIR)
+        symlink_path = os.path.join(DOCTYPE_DIR, folder)
+        if os.path.lexists(symlink_path):
+            os.unlink(symlink_path)
+        os.symlink(rel_to_doctype, symlink_path)
+
+        # Build shim path: DOCTYPE_DIR/<scrub>/
         s = scrub(doc_name)
 
         if s == folder:
@@ -174,6 +232,8 @@ def make_shims(pkg_root: str) -> None:
                 f"NO REAL PY, plain Document shim: {doc_name:25s}  "
                 f"scrub={s:20s}  folder={folder}  -> {py_file}"
             )
+
+    print(f"\nDocTypes found ({len(found)}): {', '.join(found)}")
 
 
 if __name__ == "__main__":

@@ -55,16 +55,24 @@ def main() -> None:
         print(f"doctypes/ not found in {pkg_root}")
         return
 
-    for folder in sorted(os.listdir(doctypes_dir)):
-        json_path = os.path.join(doctypes_dir, folder, f"{folder}.json")
-        if not os.path.isfile(json_path):
+    # Collect all DocType folders: top-level + nested (via symlinks or real dirs)
+    folders = []
+    for root, dirs, files in os.walk(doctypes_dir):
+        if root == doctypes_dir:
             continue
+        rel = os.path.relpath(root, doctypes_dir)
+        if os.sep in rel or "/" in rel:
+            folder = os.path.basename(root)
+            if os.path.isfile(os.path.join(root, f"{folder}.json")):
+                folders.append((root, folder))
 
+    for root, folder in sorted(folders):
+        json_path = os.path.join(root, f"{folder}.json")
         with open(json_path) as fh:
             data = json.load(fh)
         s = scrub(data.get("name", ""))
 
-        real_py = os.path.join(pkg_root, "doctypes", folder, f"{folder}.py")
+        real_py = os.path.join(root, f"{folder}.py")
 
         # Real path — skip with a note if no real .py exists
         if os.path.isfile(real_py):
