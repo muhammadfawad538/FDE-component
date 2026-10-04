@@ -125,10 +125,13 @@ jobs:
 
           cd fde_bench
           export PYTHONPATH="${PYTHONPATH:-}:$(pwd)/apps/fde_component:$(pwd)/apps/frappe"
+
+          # Register fde_component BEFORE bench new-site so Frappe includes
+          # it in the module map from the start
+          printf "frappe\nfde_component\n" > sites/apps.txt
+
           mkdir -p logs test.localhost/logs
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
-
-          printf "frappe\nfde_component\n" > sites/apps.txt
           echo "=== apps.txt ==="
           cat -A sites/apps.txt
 
