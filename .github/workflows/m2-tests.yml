@@ -48,9 +48,15 @@ jobs:
           pip install -q -e fde_bench/apps/frappe
           fde_bench/env/bin/python -m pip install -q whoosh pytest
           cp -r fde_component fde_bench/apps/fde_component
-          cd fde_bench/apps/fde_component/fde_component
-          ln -s doctypes doctype
-          cd "$GITHUB_WORKSPACE"
+
+          # Build module subpackage in the CI copy so Frappe can import
+          # fde_component.fde_component and find /doctype/ and /doctypes/
+          PKG=fde_bench/apps/fde_component/fde_component
+          mkdir -p "$PKG/fde_component"
+          touch "$PKG/fde_component/__init__.py"
+          ln -s ../doctypes "$PKG/fde_component/doctype"
+          ln -s ../doctypes "$PKG/fde_component/doctypes"
+
           fde_bench/env/bin/python -m pip install -q -e fde_bench/apps/fde_component
 
           # Python 3.14 compatibility patch
@@ -65,13 +71,17 @@ jobs:
           mkdir -p sites logs test.localhost/logs
           printf "frappe\nfde_component\n" > sites/apps.txt
           bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
+
+          # Pre-install import check — surface path errors before install-app
+          fde_bench/env/bin/python -c "import fde_component.fde_component.doctypes.sync_job.sync_job" 2>&1 || true
+
           bench --site test.localhost install-app fde_component
 
       - name: Debug and conditionally migrate
         run: |
           cd fde_bench
           cat -A fde_component/fde_component/modules.txt
-          ls -la fde_component/fde_component/
+          ls -laR fde_component/fde_component/fde_component
           EXISTS=$(bench --site test.localhost execute frappe.db.exists --args "['DocType','SyncJob']")
           echo "SyncJob exists: $EXISTS"
           if [ "$EXISTS" != "1" ] && [ "$EXISTS" != "True" ]; then
