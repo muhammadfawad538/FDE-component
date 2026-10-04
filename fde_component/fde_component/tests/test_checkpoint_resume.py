@@ -18,7 +18,7 @@ import unittest
 import frappe
 
 from fde_component.jobs.base import CheckpointedJob
-from fde_component.jobs.exceptions import JobInterrupted
+from fde_component.jobs.exceptions import JobInterrupted, JobFailed
 from fde_component.jobs.idempotency import mark_dedup
 
 
