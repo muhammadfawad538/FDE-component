@@ -206,12 +206,25 @@ class TestRedriveScoping(DLQTestCase):
             self.assertEqual(len(dlq_entries), 1)
             failed_key = dlq_entries[0]["idempotency_key"]
 
+            # Debug: list dedup keys and whether failed_key is present
+            keys_before = [r["idempotency_key"] for r in frappe.get_all(
+                "SyncJobDedup", filters={"job_type": "test.redrive_scope"},
+                fields=["idempotency_key", "status"],
+            )]
+            print(f"DEBUG dedup keys BEFORE re_drive: {keys_before}, has_failed={failed_key in keys_before}")
+
             # Reset tracking for redrive run
             ScopedJob._processed_ids = []
 
             # Phase 2: re_drive the failed record
             dlq_doc = frappe.get_doc("SyncJobDLQ", dlq_entries[0]["name"])
             re_drive(dlq_doc)
+
+            keys_after_redrive = [r["idempotency_key"] for r in frappe.get_all(
+                "SyncJobDedup", filters={"job_type": "test.redrive_scope"},
+                fields=["idempotency_key", "status"],
+            )]
+            print(f"DEBUG dedup keys AFTER re_drive: {keys_after_redrive}, failed_key={failed_key in keys_after_redrive}")
 
             # Find the child job
             child_jobs = frappe.get_all(
@@ -248,6 +261,11 @@ class TestRedriveScoping(DLQTestCase):
             # Dedup: 5 original + 1 redrive = 6
             dedup_after = frappe.db.count("SyncJobDedup", {"job_type": "test.redrive_scope"})
             print(f"DEBUG dedup_after={dedup_after}")
+            keys_after_child = [r["idempotency_key"] for r in frappe.get_all(
+                "SyncJobDedup", filters={"job_type": "test.redrive_scope"},
+                fields=["idempotency_key", "status"],
+            )]
+            print(f"DEBUG dedup keys AFTER child: {keys_after_child}, failed_key={failed_key in keys_after_child}")
             self.assertEqual(dedup_after, 6)
 
             # Failed index now has a completed dedup entry
@@ -261,6 +279,7 @@ class TestRedriveScoping(DLQTestCase):
             self.assertTrue(exists)
         finally:
             self._cleanup_sync_job(doc_name, job_type="test.redrive_scope")
+            ScopedJob._processed_ids = []
             # Cleanup child jobs
             for d in frappe.get_all("SyncJob", filters={"parent_job": doc_name}, pluck="name"):
                 try:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
-from typing import Any, Generator
+from typing import Any
 
 import unittest
 
@@ -20,7 +20,7 @@ import frappe
 from fde_component.jobs.base import CheckpointedJob
 from fde_component.jobs.exceptions import JobInterrupted, JobFailed
 from fde_component.jobs.idempotency import IdempotencyKey, mark_dedup
-from fde_component.jobs.runner import run_job
+from fde_component.jobs.runner import register_job, JOB_REGISTRY, run_job
 from fde_component.doctypes.sync_job_dlq.sync_job_dlq import re_drive
 
 
@@ -33,6 +33,7 @@ KILL_AT = 5_000
 # ── Test job ─────────────────────────────────────────────────────────────────
 
 
+@register_job("test.counting_import")
 class CountingImportJob(CheckpointedJob):
     """
     A deterministic test job: iterates N records, each identified by
@@ -168,6 +169,7 @@ class TestKillAndResume(CheckpointTestCase):
             self.assertEqual(len(CountingImportJob.processed_indices), TOTAL_RECORDS)
         finally:
             self._cleanup_sync_job(doc_name)
+            JOB_REGISTRY.pop("test.counting_import", None)
 
 
 class TestTransientFailureResume(CheckpointTestCase):
@@ -237,6 +239,7 @@ class TestChecksumLineage(CheckpointTestCase):
                 int(cs, 16)
         finally:
             self._cleanup_sync_job(doc_name)
+            JOB_REGISTRY.pop("test.counting_import", None)
 
     def test_checksum_is_not_just_offset_counter(self):
         doc_name = self._make_sync_job_doc(total_records=100)
@@ -268,6 +271,7 @@ class TestChecksumLineage(CheckpointTestCase):
             self.assertEqual(last_cp_1, last_cp_2)
         finally:
             self._cleanup_sync_job(doc_name)
+            JOB_REGISTRY.pop("test.counting_import", None)
 
 
 
@@ -330,6 +334,7 @@ class TestDLQChecksumLineage(CheckpointTestCase):
             self.assertEqual(child_cp, expected)
         finally:
             self._cleanup_sync_job(doc_name)
+            JOB_REGISTRY.pop("test.counting_import", None)
             frappe.db.delete("SyncJob", {"parent_job": doc_name})
             frappe.db.delete("SyncJobCheckpoint", {"parent": ["like", "SJ-REDRIVE-TEST%"]})
             frappe.db.delete("SyncJobDedup", {"job_type": "test.counting_import"})
@@ -359,6 +364,7 @@ class TestCheckpointFrequency(CheckpointTestCase):
             )
         finally:
             self._cleanup_sync_job(doc_name)
+            JOB_REGISTRY.pop("test.counting_import", None)
 
     def test_final_checkpoint_at_end_of_run(self):
         doc_name = self._make_sync_job_doc(total_records=500)
@@ -376,3 +382,4 @@ class TestCheckpointFrequency(CheckpointTestCase):
             self.assertEqual(last[0]["offset"], 500)
         finally:
             self._cleanup_sync_job(doc_name)
+            JOB_REGISTRY.pop("test.counting_import", None)
