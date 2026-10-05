@@ -2,7 +2,7 @@ name: M2 Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, debug-ci]
   pull_request:
     branches: [main]
 
