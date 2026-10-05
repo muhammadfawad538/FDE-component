@@ -64,7 +64,9 @@ def run_job(sync_job_name: str, job_type: str, **kwargs: Any) -> None:
         """,
         (sync_job_name,),
     )
-    if frappe.db.affected_rows() == 0:
+    # frappe.db.affected_rows() is not exposed on MariaDBDatabase;
+    # check the raw cursor rowcount to see if the claim succeeded.
+    if frappe.db._cursor.rowcount == 0:
         sync_job = frappe.get_doc("SyncJob", sync_job_name)
         logger.info(
             "Job %s already claimed (status=%s) — skipping",

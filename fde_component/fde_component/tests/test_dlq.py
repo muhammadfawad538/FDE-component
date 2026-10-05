@@ -231,6 +231,12 @@ class TestRedriveScoping(DLQTestCase):
             child_job._fail_at = set()  # redriven record should succeed
             child_job.run()
 
+            # TEMP DEBUG
+            child_doc = frappe.get_doc("SyncJob", child_job_name)
+            print(f"DEBUG child_doc.status={child_doc.status} _processed_ids={ScopedJob._processed_ids}")
+            dedup_before_assert = frappe.db.count("SyncJobDedup", {"job_type": "test.redrive_scope"})
+            print(f"DEBUG dedup_before_assert={dedup_before_assert}")
+
             # Only the failed record (index 2) reaches process_record
             self.assertEqual(ScopedJob._processed_ids, [2],
                              f"Expected only index 2, got {ScopedJob._processed_ids}")
@@ -241,6 +247,7 @@ class TestRedriveScoping(DLQTestCase):
 
             # Dedup: 5 original + 1 redrive = 6
             dedup_after = frappe.db.count("SyncJobDedup", {"job_type": "test.redrive_scope"})
+            print(f"DEBUG dedup_after={dedup_after}")
             self.assertEqual(dedup_after, 6)
 
             # Failed index now has a completed dedup entry
