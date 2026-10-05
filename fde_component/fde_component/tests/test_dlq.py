@@ -132,7 +132,7 @@ class TestDLQ(DLQTestCase):
             doc = frappe.get_doc("SyncJob", doc_name)
             self.assertEqual(doc.status, "Dead Lettered")
         finally:
-            self._cleanup_sync_job(doc_name)
+            self._cleanup_sync_job(doc_name, job_type="test.failing_job")
 
     def test_dlq_entries_created(self):
         doc_name = self._make_sync_job_doc("test.failing_job")
@@ -143,7 +143,7 @@ class TestDLQ(DLQTestCase):
             dlq_count = frappe.db.count("SyncJobDLQ", {"sync_job": doc_name})
             self.assertGreater(dlq_count, 0)
         finally:
-            self._cleanup_sync_job(doc_name)
+            self._cleanup_sync_job(doc_name, job_type="test.failing_job")
 
     def test_successful_records_not_affected_by_dlq(self):
         doc_name = self._make_sync_job_doc("test.mixed_job", total_records=10)

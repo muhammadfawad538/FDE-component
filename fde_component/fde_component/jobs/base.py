@@ -263,6 +263,7 @@ class CheckpointedJob:
                     self._checksum_hasher.update(key.hex.encode())
                     self._processed += 1
                     self._publish_progress(total)
+                    offset += 1
                     continue
 
                 # Reclaim stale claims from crashed workers before claiming
@@ -274,6 +275,7 @@ class CheckpointedJob:
                     self._checksum_hasher.update(key.hex.encode())
                     self._processed += 1
                     self._publish_progress(total)
+                    offset += 1
                     continue
 
                 # --- Process with retry/DLQ (single unit, tested in isolation) ---
@@ -293,6 +295,8 @@ class CheckpointedJob:
                     self._publish_progress(total)
                     self._any_dead_lettered = True
                     record_failed = True
+                    offset += 1
+                    continue
 
                 if record_failed:
                     continue

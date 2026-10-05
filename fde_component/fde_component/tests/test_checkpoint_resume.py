@@ -78,6 +78,7 @@ class CheckpointTestCase(unittest.TestCase):
     def _cleanup_sync_job(self, doc_name: str):
         try:
             frappe.db.delete("SyncJobCheckpoint", {"parent": doc_name})
+            frappe.db.delete("SyncJobDedup", {"job_type": "test.counting_import"})
             frappe.db.delete("SyncJob", doc_name)
             frappe.db.commit()
         except Exception:
