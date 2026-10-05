@@ -193,7 +193,7 @@ class TestRedriveScoping(DLQTestCase):
             doc = frappe.get_doc("SyncJob", doc_name)
             self.assertEqual(doc.status, "Dead Lettered")
 
-            # All 5 records should have dedup entries (including DLQ'd index 2)
+            # All 5 records have dedup entries (including DLQ'd index 2)
             dedup_count = frappe.db.count("SyncJobDedup", {"job_type": "test.redrive_scope"})
             self.assertEqual(dedup_count, 5)
 
@@ -206,13 +206,6 @@ class TestRedriveScoping(DLQTestCase):
             self.assertEqual(len(dlq_entries), 1)
             failed_key = dlq_entries[0]["idempotency_key"]
 
-            # Debug: list dedup keys and whether failed_key is present
-            keys_before = [r["idempotency_key"] for r in frappe.get_all(
-                "SyncJobDedup", filters={"job_type": "test.redrive_scope"},
-                fields=["idempotency_key", "status"],
-            )]
-            print(f"DEBUG dedup keys BEFORE re_drive: {keys_before}, has_failed={failed_key in keys_before}")
-
             # Reset tracking for redrive run
             ScopedJob._processed_ids = []
 
@@ -220,11 +213,13 @@ class TestRedriveScoping(DLQTestCase):
             dlq_doc = frappe.get_doc("SyncJobDLQ", dlq_entries[0]["name"])
             re_drive(dlq_doc)
 
+            # re_drive removes the DLQ'd key's dedup row (5 → 4) so the child
+            # can re-process it; the child re-marks it completed (4 → 5).
             keys_after_redrive = [r["idempotency_key"] for r in frappe.get_all(
                 "SyncJobDedup", filters={"job_type": "test.redrive_scope"},
                 fields=["idempotency_key", "status"],
             )]
-            print(f"DEBUG dedup keys AFTER re_drive: {keys_after_redrive}, failed_key={failed_key in keys_after_redrive}")
+            self.assertNotIn(failed_key, keys_after_redrive)
 
             # Find the child job
             child_jobs = frappe.get_all(
@@ -244,12 +239,6 @@ class TestRedriveScoping(DLQTestCase):
             child_job._fail_at = set()  # redriven record should succeed
             child_job.run()
 
-            # TEMP DEBUG
-            child_doc = frappe.get_doc("SyncJob", child_job_name)
-            print(f"DEBUG child_doc.status={child_doc.status} _processed_ids={ScopedJob._processed_ids}")
-            dedup_before_assert = frappe.db.count("SyncJobDedup", {"job_type": "test.redrive_scope"})
-            print(f"DEBUG dedup_before_assert={dedup_before_assert}")
-
             # Only the failed record (index 2) reaches process_record
             self.assertEqual(ScopedJob._processed_ids, [2],
                              f"Expected only index 2, got {ScopedJob._processed_ids}")
@@ -258,15 +247,18 @@ class TestRedriveScoping(DLQTestCase):
             child_doc = frappe.get_doc("SyncJob", child_job_name)
             self.assertEqual(child_doc.status, "Completed")
 
-            # Dedup: 5 original + 1 redrive = 6
+            # Dedup stays at 5: re_drive removed the DLQ'd row (5→4),
+            # the child re-processed index 2 (4→5).
             dedup_after = frappe.db.count("SyncJobDedup", {"job_type": "test.redrive_scope"})
-            print(f"DEBUG dedup_after={dedup_after}")
+            self.assertEqual(dedup_after, 5)
+
+            # The redriven key is now present and completed
             keys_after_child = [r["idempotency_key"] for r in frappe.get_all(
                 "SyncJobDedup", filters={"job_type": "test.redrive_scope"},
                 fields=["idempotency_key", "status"],
             )]
-            print(f"DEBUG dedup keys AFTER child: {keys_after_child}, failed_key={failed_key in keys_after_child}")
-            self.assertEqual(dedup_after, 6)
+            self.assertIn(failed_key, keys_after_child)
+            self.assertEqual(len(keys_after_child), 5)
 
             # Failed index now has a completed dedup entry
             redriven_key = IdempotencyKey("test.redrive_scope", "record-2", "").hex
