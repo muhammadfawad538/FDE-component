@@ -324,7 +324,14 @@ class TestDLQChecksumLineage(CheckpointTestCase):
             # Run the child through the real runner (synchronous)
             run_job(child_job_name, "test.counting_import")
 
-            # The child's last checkpoint checksum should start from the parent's
+            # Compute expected the same way the job does: seed from parent, then
+            # chain the child's record key(s) in the same order they were processed.
+            redriven_key = IdempotencyKey("test.counting_import", "record-2", "").hex
+            seeded = hashlib.sha256(parent_last_checksum.encode())
+            seeded.update(redriven_key.encode())
+            expected = seeded.hexdigest()
+
+            # The child's last checkpoint checksum should chain off the parent's
             child_cp = frappe.get_all(
                 "SyncJobCheckpoint",
                 filters={"parent": child_job_name},
@@ -332,7 +339,7 @@ class TestDLQChecksumLineage(CheckpointTestCase):
                 order_by="idx desc",
                 limit=1,
             )[0]["checksum"]
-            expected = hashlib.sha256(parent_last_checksum.encode()).hexdigest()
+            print(f"DEBUG child_cp={child_cp} expected={expected} redriven_key={redriven_key}")
             self.assertEqual(child_cp, expected)
         finally:
             self._cleanup_sync_job(doc_name)
