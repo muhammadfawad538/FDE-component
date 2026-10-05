@@ -359,8 +359,8 @@ class CheckpointedJob:
         except Exception:
             frappe.db.rollback()
             tb = frappe.get_traceback()
+            print("SWALLOWED-EXCEPTION in save_checkpoint:\n" + tb, flush=True)
             frappe.log_error(title="save_checkpoint failed", message=tb)
-            print(tb)  # temporary, remove after diagnosis
 
     # ── DLQ write (called by retry_dlq, never by job code directly) ────────
 
@@ -390,8 +390,8 @@ class CheckpointedJob:
         except Exception:
             frappe.db.rollback()
             tb = frappe.get_traceback()
+            print("SWALLOWED-EXCEPTION in _write_dlq:\n" + tb, flush=True)
             frappe.log_error(title="_write_dlq failed", message=tb)
-            print(tb)  # temporary, remove after diagnosis
             raise
 
     # ── Signal handling ────────────────────────────────────────────────────

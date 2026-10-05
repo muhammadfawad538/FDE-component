@@ -114,4 +114,11 @@ jobs:
       - name: Run tests
         run: |
           cd "$BENCH_DIR"
-          bench --site test.localhost run-tests --app fde_component
+          set +e
+          bench --site test.localhost run-tests --app fde_component 2>&1 | tee "$GITHUB_WORKSPACE/test-output.txt"
+          RC=${PIPESTATUS[0]}
+          echo "=== SWALLOWED EXCEPTIONS ==="
+          grep -n -A25 "SWALLOWED-EXCEPTION" "$GITHUB_WORKSPACE/test-output.txt" | head -150
+          echo "=== ERROR LOG TABLE ==="
+          bench --site test.localhost execute frappe.db.sql --args '["select creation, method, left(error,1500) from `tabError Log` order by creation desc limit 5"]' || true
+          exit $RC
