@@ -79,7 +79,16 @@ def run_job(sync_job_name: str, job_type: str, **kwargs: Any) -> None:
         frappe.db.commit()
         raise JobFailed(f"No CheckpointedJob registered for job_type={job_type!r}")
 
-    job = job_cls(job_name=sync_job_name, **kwargs)
+    # Extract parent_checksum from source_config for redrive lineage
+    parent_checksum = None
+    try:
+        source_config = frappe.db.get_value("SyncJob", sync_job_name, "source_config") or "{}"
+        config = frappe.parse_json(source_config)
+        parent_checksum = config.get("parent_checksum")
+    except Exception:
+        pass
+
+    job = job_cls(job_name=sync_job_name, parent_checksum=parent_checksum, **kwargs)
     try:
         job.run()
     except Exception:

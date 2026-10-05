@@ -20,6 +20,8 @@ import frappe
 from fde_component.jobs.base import CheckpointedJob
 from fde_component.jobs.exceptions import JobInterrupted, JobFailed
 from fde_component.jobs.idempotency import mark_dedup
+from fde_component.jobs.runner import run_job
+from fde_component.doctypes.sync_job_dlq.sync_job_dlq import re_drive
 
 
 logger = logging.getLogger(__name__)
@@ -272,7 +274,7 @@ class TestChecksumLineage(CheckpointTestCase):
 class TestDLQChecksumLineage(CheckpointTestCase):
 
     def test_redrive_job_restores_parent_checksum(self):
-        """A re-driven job inherits the parent's checksum lineage."""
+        """A re-driven job inherits the parent's checksum lineage end-to-end."""
         doc_name = self._make_sync_job_doc(total_records=20)
         try:
             # Run parent job fully
@@ -287,38 +289,51 @@ class TestDLQChecksumLineage(CheckpointTestCase):
                 limit=1,
             )[0]["checksum"]
 
-            # Re-read source_config to verify parent_job is set
-            parent_doc = frappe.get_doc("SyncJob", doc_name)
-            # Simulate re_drive by setting parent_job and source_config with checksum
-            frappe.db.set_value("SyncJob", doc_name, {
-                "parent_job": doc_name,  # self-reference for test
-                "source_config": '{"parent_checksum": "' + parent_last_checksum + '"}'
+            # Create a DLQ entry and call the real re_drive() server action,
+            # which stores parent_checksum in the child's source_config.
+            dlq_doc = frappe.get_doc({
+                "doctype": "SyncJobDLQ",
+                "sync_job": doc_name,
+                "idempotency_key": IdempotencyKey("test.counting_import", "record-2", "").hex,
+                "status": "Dead Lettered",
             })
+            dlq_doc.insert(ignore_permissions=True)
             frappe.db.commit()
 
-            # Child job should restore parent's checksum via parent_checksum kwarg
-            # (the runner extracts this from source_config and passes it to __init__)
-            child_job_name = "SJ-REDRIVE-TEST"
-            child_doc = frappe.get_doc({
-                "doctype": "SyncJob",
-                "job_type": "test.counting_import",
-                "status": "Queued",
-                "parent_job": doc_name,
-                "source_config": '{"parent_checksum": "' + parent_last_checksum + '"}',
-            })
-            child_doc.insert(ignore_permissions=True)
-            frappe.db.commit()
+            re_drive(dlq_doc)
 
-            child_job = CountingImportJob(job_name=child_doc.name, total=5, parent_checksum=parent_last_checksum)
-            # Verify the child's checksum hasher starts from the parent's checksum
+            # Find the child job created by re_drive
+            child_jobs = frappe.get_all(
+                "SyncJob",
+                filters={"parent_job": doc_name, "job_type": "test.counting_import"},
+                fields=["name", "source_config"],
+            )
+            self.assertEqual(len(child_jobs), 1)
+            child_job_name = child_jobs[0]["name"]
+
+            # Verify parent_checksum was stored in source_config
+            child_config = frappe.parse_json(child_jobs[0]["source_config"] or "{}")
+            self.assertEqual(child_config.get("parent_checksum"), parent_last_checksum)
+
+            # Run the child through the real runner (synchronous)
+            run_job(child_job_name, "test.counting_import")
+
+            # The child's last checkpoint checksum should start from the parent's
+            child_cp = frappe.get_all(
+                "SyncJobCheckpoint",
+                filters={"parent": child_job_name},
+                fields=["checksum"],
+                order_by="idx desc",
+                limit=1,
+            )[0]["checksum"]
             expected = hashlib.sha256(parent_last_checksum.encode()).hexdigest()
-            actual = child_job._compute_checksum()
-            self.assertEqual(actual, expected)
+            self.assertEqual(child_cp, expected)
         finally:
             self._cleanup_sync_job(doc_name)
             frappe.db.delete("SyncJob", {"parent_job": doc_name})
             frappe.db.delete("SyncJobCheckpoint", {"parent": ["like", "SJ-REDRIVE-TEST%"]})
             frappe.db.delete("SyncJobDedup", {"job_type": "test.counting_import"})
+            frappe.db.delete("SyncJobDLQ", {"sync_job": doc_name})
             frappe.db.commit()
 
 

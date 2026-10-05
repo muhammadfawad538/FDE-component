@@ -321,7 +321,7 @@ class CheckpointedJob:
 
                 # --- Checkpoint + progress ---
                 if self._should_checkpoint():
-                    self.save_checkpoint(offset)
+                    self.save_checkpoint(offset + 1)
                     self._last_checkpoint_time = time.monotonic()
 
                 self._publish_progress(total)

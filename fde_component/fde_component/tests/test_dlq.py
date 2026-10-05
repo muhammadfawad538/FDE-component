@@ -83,6 +83,8 @@ class ScopedJob(CheckpointedJob):
             yield {"id": f"record-{i}", "index": i}
 
     def process_record(self, record):
+        if record["index"] in self._fail_at:
+            raise JobFailed("Simulated failure")
         self._processed_ids.append(record["index"])
 
 
@@ -225,6 +227,7 @@ class TestRedriveScoping(DLQTestCase):
 
             # Phase 3: run the child job
             child_job = ScopedJob(job_name=child_job_name)
+            child_job._fail_at = set()  # redriven record should succeed
             child_job.run()
 
             # Only the failed record (index 2) reaches process_record
