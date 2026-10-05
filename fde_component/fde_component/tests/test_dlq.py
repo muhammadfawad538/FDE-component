@@ -201,7 +201,7 @@ class TestRedriveScoping(DLQTestCase):
             dlq_entries = frappe.get_all(
                 "SyncJobDLQ",
                 filters={"sync_job": doc_name},
-                fields=["idempotency_key"],
+                fields=["idempotency_key", "name"],
             )
             self.assertEqual(len(dlq_entries), 1)
             failed_key = dlq_entries[0]["idempotency_key"]
@@ -210,7 +210,8 @@ class TestRedriveScoping(DLQTestCase):
             ScopedJob._processed_ids = []
 
             # Phase 2: re_drive the failed record
-            re_drive(dlq_entries[0])
+            dlq_doc = frappe.get_doc("SyncJobDLQ", dlq_entries[0]["name"])
+            re_drive(dlq_doc)
 
             # Find the child job
             child_jobs = frappe.get_all(

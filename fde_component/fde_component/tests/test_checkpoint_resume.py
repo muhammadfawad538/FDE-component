@@ -19,7 +19,7 @@ import frappe
 
 from fde_component.jobs.base import CheckpointedJob
 from fde_component.jobs.exceptions import JobInterrupted, JobFailed
-from fde_component.jobs.idempotency import mark_dedup
+from fde_component.jobs.idempotency import IdempotencyKey, mark_dedup
 from fde_component.jobs.runner import run_job
 from fde_component.doctypes.sync_job_dlq.sync_job_dlq import re_drive
 
