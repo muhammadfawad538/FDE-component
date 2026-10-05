@@ -92,6 +92,12 @@ class ScopedJob(CheckpointedJob):
 class DLQTestCase(unittest.TestCase):
     """Base class providing setUp/tearDown for DLQ tests."""
 
+    def setUp(self):
+        """Ensure no leftover dedup or DLQ rows from prior tests."""
+        frappe.db.delete("SyncJobDedup", {})
+        frappe.db.delete("SyncJobDLQ", {})
+        frappe.db.commit()
+
     def _make_sync_job_doc(self, job_type: str, total_records: int = TOTAL_RECORDS,
                            source_config: str = "{}") -> str:
         doc = frappe.get_doc({

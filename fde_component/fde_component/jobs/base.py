@@ -237,6 +237,19 @@ class CheckpointedJob:
         self._last_checkpoint_time = time.monotonic()
         self._restore_checksum()
         offset = self._get_start_offset()
+
+        # On resume, restore processed count from the last checkpoint
+        # so _update_counts reports the cumulative total, not just this run.
+        last_cp = frappe.get_all(
+            "SyncJobCheckpoint",
+            filters={"parent": self.job_name},
+            fields=["records_processed"],
+            order_by="idx desc",
+            limit=1,
+        )
+        if last_cp:
+            self._processed = last_cp[0].get("records_processed") or 0
+
         total = self._get_total()
 
         logger.info("Job %s starting at offset %d (total=%s)", self.job_name, offset, total)

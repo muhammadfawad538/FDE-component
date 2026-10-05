@@ -63,6 +63,11 @@ class CountingImportJob(CheckpointedJob):
 
 class CheckpointTestCase(unittest.TestCase):
 
+    def setUp(self):
+        """Ensure no leftover dedup rows from prior tests."""
+        frappe.db.delete("SyncJobDedup", {"job_type": "test.counting_import"})
+        frappe.db.commit()
+
     def _make_sync_job_doc(self, total_records: int = TOTAL_RECORDS) -> str:
         doc = frappe.get_doc({
             "doctype": "SyncJob",
@@ -291,7 +296,8 @@ class TestDLQChecksumLineage(CheckpointTestCase):
             })
             frappe.db.commit()
 
-            # Child job should restore parent's checksum
+            # Child job should restore parent's checksum via parent_checksum kwarg
+            # (the runner extracts this from source_config and passes it to __init__)
             child_job_name = "SJ-REDRIVE-TEST"
             child_doc = frappe.get_doc({
                 "doctype": "SyncJob",
@@ -303,11 +309,9 @@ class TestDLQChecksumLineage(CheckpointTestCase):
             child_doc.insert(ignore_permissions=True)
             frappe.db.commit()
 
-            child_job = CountingImportJob(job_name=child_doc.name, total=5)
+            child_job = CountingImportJob(job_name=child_doc.name, total=5, parent_checksum=parent_last_checksum)
             # Verify the child's checksum hasher starts from the parent's checksum
             expected = hashlib.sha256(parent_last_checksum.encode()).hexdigest()
-            # _restore_checksum reads from DB — after init it should be seeded
-            child_job._restore_checksum()
             actual = child_job._compute_checksum()
             self.assertEqual(actual, expected)
         finally:
