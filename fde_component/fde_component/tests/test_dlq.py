@@ -176,6 +176,115 @@ class TestDLQ(DLQTestCase):
             self._cleanup_sync_job(doc_name, job_type="test.mixed_job")
 
 
+class TestSkipPathsIncrementCounters(DLQTestCase):
+    """
+    When a record is skipped (dedup-duplicate or claim-fail), _processed
+    and offset must still increment so the checkpoint advances past it.
+    """
+
+    def test_dedup_skip_increments_processed_and_offset(self):
+        """Dedup-skip path: record already completed by another worker."""
+        doc_name = self._make_sync_job_doc("test.skip_offset", total_records=5)
+        try:
+            class SkipJob(CheckpointedJob):
+                job_type = "test.skip_offset"
+                max_retries = 0
+                checkpoint_every = 1
+                checkpoint_seconds = 999.0
+
+                def iter_records(self, offset, redrive_key=None):
+                    for i in range(offset, 5):
+                        yield {"id": f"record-{i}", "index": i}
+
+                def process_record(self, record):
+                    pass
+
+            # Pre-create a completed dedup row for record 0
+            key0 = IdempotencyKey("test.skip_offset", "record-0", "").hex
+            frappe.get_doc({
+                "doctype": "SyncJobDedup",
+                "job_type": "test.skip_offset",
+                "idempotency_key": key0,
+                "source_id": "record-0",
+                "sync_job_id": doc_name,
+                "status": "completed",
+            }).insert(ignore_permissions=True)
+            frappe.db.commit()
+
+            job = SkipJob(job_name=doc_name)
+            job.run()
+
+            doc = frappe.get_doc("SyncJob", doc_name)
+            self.assertEqual(doc.status, "Completed")
+
+            # _processed counts all 5 records including the skipped one
+            self.assertEqual(doc.processed, 5)
+
+            # First checkpoint should have offset=1 (skipped record counted)
+            cp = frappe.get_all(
+                "SyncJobCheckpoint",
+                filters={"parent": doc_name},
+                fields=["offset", "records_processed"],
+                order_by="idx asc",
+            )
+            self.assertGreaterEqual(len(cp), 1)
+            self.assertEqual(cp[0]["offset"], 1)
+            self.assertEqual(cp[0]["records_processed"], 1)
+        finally:
+            self._cleanup_sync_job(doc_name, job_type="test.skip_offset")
+
+    def test_claim_fail_skip_increments_processed_and_offset(self):
+        """Claim-fail path: another worker already claimed this record."""
+        doc_name = self._make_sync_job_doc("test.skip_offset", total_records=5)
+        try:
+            class SkipJob(CheckpointedJob):
+                job_type = "test.skip_offset"
+                max_retries = 0
+                checkpoint_every = 1
+                checkpoint_seconds = 999.0
+
+                def iter_records(self, offset, redrive_key=None):
+                    for i in range(offset, 5):
+                        yield {"id": f"record-{i}", "index": i}
+
+                def process_record(self, record):
+                    pass
+
+            # Pre-create an in_progress dedup row for record 0
+            key0 = IdempotencyKey("test.skip_offset", "record-0", "").hex
+            frappe.get_doc({
+                "doctype": "SyncJobDedup",
+                "job_type": "test.skip_offset",
+                "idempotency_key": key0,
+                "source_id": "record-0",
+                "sync_job_id": doc_name,
+                "status": "in_progress",
+            }).insert(ignore_permissions=True)
+            frappe.db.commit()
+
+            job = SkipJob(job_name=doc_name)
+            job.run()
+
+            doc = frappe.get_doc("SyncJob", doc_name)
+            self.assertEqual(doc.status, "Completed")
+
+            # _processed counts all 5 records including the claim-failed one
+            self.assertEqual(doc.processed, 5)
+
+            # First checkpoint should have offset=1 (claim-fail record counted)
+            cp = frappe.get_all(
+                "SyncJobCheckpoint",
+                filters={"parent": doc_name},
+                fields=["offset", "records_processed"],
+                order_by="idx asc",
+            )
+            self.assertGreaterEqual(len(cp), 1)
+            self.assertEqual(cp[0]["offset"], 1)
+            self.assertEqual(cp[0]["records_processed"], 1)
+        finally:
+            self._cleanup_sync_job(doc_name, job_type="test.skip_offset")
+
+
 class TestRedriveScoping(DLQTestCase):
     """
     Regression test: redrive must scope the new job to the single failed

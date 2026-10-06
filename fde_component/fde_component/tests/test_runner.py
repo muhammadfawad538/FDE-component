@@ -11,8 +11,28 @@ from __future__ import annotations
 import unittest
 
 import frappe
-from fde_component.jobs.runner import run_job
+from fde_component.jobs.runner import run_job, JOB_REGISTRY
+from fde_component.jobs.base import CheckpointedJob
 from fde_component.jobs.exceptions import JobFailed
+
+
+class _TrackingJob(CheckpointedJob):
+    job_type = "test.runner_dispatch"
+    max_retries = 0
+    checkpoint_every = 1000
+    checkpoint_seconds = 999.0
+    processed_ids: list = []
+
+    def iter_records(self, offset, redrive_key=None):
+        for i in range(offset, 3):
+            yield {"id": f"record-{i}", "index": i}
+
+    def process_record(self, record):
+        _TrackingJob.processed_ids.append(record["index"])
+
+
+# Register so run_job can resolve the class
+JOB_REGISTRY["test.runner_dispatch"] = _TrackingJob
 
 
 class RunnerTestCase(unittest.TestCase):
@@ -101,5 +121,29 @@ class TestRunnerDispatch(RunnerTestCase):
 
             doc = frappe.get_doc("SyncJob", doc_name)
             self.assertEqual(doc.status, "Completed")
+        finally:
+            self._cleanup_job_doc(doc_name)
+
+    def test_double_dispatch_second_call_skips_processing(self):
+        """
+        If run_job is called while the SyncJob is already Running, the
+        second call must not process any records (atomic claim guard).
+        """
+        doc_name = self._make_queued_job_doc()
+        try:
+            _TrackingJob.processed_ids = []
+
+            # First call: Queued → Running, processes all 3 records
+            run_job(doc_name, "test.runner_dispatch")
+            self.assertEqual(_TrackingJob.processed_ids, [0, 1, 2])
+
+            # Simulate the job still being Running (e.g. two workers racing)
+            frappe.db.set_value("SyncJob", doc_name, {"status": "Running"})
+            frappe.db.commit()
+            _TrackingJob.processed_ids = []
+
+            # Second call: Running → claim fails (rowcount=0), no records processed
+            run_job(doc_name, "test.runner_dispatch")
+            self.assertEqual(_TrackingJob.processed_ids, [])
         finally:
             self._cleanup_job_doc(doc_name)
