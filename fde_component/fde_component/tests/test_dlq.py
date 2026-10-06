@@ -301,6 +301,85 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
             self._cleanup_sync_job(doc_name, job_type="test.skip_offset")
 
 
+class TestReDriveSafety(unittest.TestCase):
+    """Atomicity and validation tests for re_drive."""
+
+    def setUp(self):
+        frappe.db.delete("SyncJobDedup", {})
+        frappe.db.delete("SyncJobDLQ", {})
+        frappe.db.commit()
+
+    def test_double_re_drive_creates_only_one_child(self):
+        """Calling re_drive twice on the same DLQ doc must create only
+        one child job (atomic status claim prevents duplicate children)."""
+        parent_doc = frappe.get_doc({
+            "doctype": "SyncJob",
+            "job_type": "test.redrive_scope",
+            "status": "Dead Lettered",
+            "total_records": 5,
+            "processed": 0,
+            "source_config": "{}",
+        })
+        parent_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        dlq_doc = frappe.get_doc({
+            "doctype": "SyncJobDLQ",
+            "sync_job": parent_doc.name,
+            "idempotency_key": IdempotencyKey("test.redrive_scope", "record-0", "").hex,
+            "status": "Dead Lettered",
+        })
+        dlq_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        re_drive(dlq_doc)
+        # Reload from DB to get the updated status
+        dlq_doc = frappe.get_doc("SyncJobDLQ", dlq_doc.name)
+        re_drive(dlq_doc)
+
+        child_jobs = frappe.get_all(
+            "SyncJob",
+            filters={"parent_job": parent_doc.name},
+            fields=["name"],
+        )
+        self.assertEqual(len(child_jobs), 1, "re_drive must create exactly one child job")
+
+        frappe.db.delete("SyncJob", {"name": parent_doc.name})
+        for cj in child_jobs:
+            frappe.delete_doc("SyncJob", cj["name"], ignore_permissions=True)
+        frappe.db.delete("SyncJobDLQ", {"sync_job": parent_doc.name})
+        frappe.db.commit()
+
+    def test_re_drive_rejects_empty_idempotency_key(self):
+        """re_drive must raise a clear error when idempotency_key is empty."""
+        parent_doc = frappe.get_doc({
+            "doctype": "SyncJob",
+            "job_type": "test.redrive_scope",
+            "status": "Dead Lettered",
+            "total_records": 5,
+            "processed": 0,
+            "source_config": "{}",
+        })
+        parent_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        dlq_doc = frappe.get_doc({
+            "doctype": "SyncJobDLQ",
+            "sync_job": parent_doc.name,
+            "idempotency_key": "",
+            "status": "Dead Lettered",
+        })
+        dlq_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        with self.assertRaises(frappe.ValidationError):
+            re_drive(dlq_doc)
+
+        frappe.db.delete("SyncJob", parent_doc.name)
+        frappe.db.delete("SyncJobDLQ", {"sync_job": parent_doc.name})
+        frappe.db.commit()
+
+
 class TestRedriveScoping(DLQTestCase):
     """
     Regression test: redrive must scope the new job to the single failed

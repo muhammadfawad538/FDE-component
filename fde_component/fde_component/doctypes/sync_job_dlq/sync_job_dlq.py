@@ -19,7 +19,27 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     """
     import json
 
+    # Reject empty/None idempotency_key — a DLQ entry without a key cannot
+    # be scoped to a single record for redrive.
+    if not doc.idempotency_key:
+        frappe.throw("Cannot re-drive a DLQ entry with an empty idempotency key")
+
     parent = frappe.get_doc("SyncJob", doc.sync_job)
+
+    # Atomically claim this DLQ entry: only transition to Re-driven if it
+    # is not already Re-driven. This prevents two concurrent calls from
+    # creating two child jobs for the same failed record.
+    frappe.db.sql(
+        """
+        UPDATE `tabSyncJobDLQ`
+        SET `status` = 'Re-driven'
+        WHERE `name` = %s AND `status` != 'Re-driven'
+        """,
+        (doc.name,),
+    )
+    if frappe.db._cursor.rowcount == 0:
+        return  # already claimed by another call
+
     new_job = frappe.new_doc("SyncJob")
     new_job.job_type = parent.job_type
     new_job.status = "Queued"
@@ -49,20 +69,15 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     frappe.db.commit()
 
     # Clear ONLY the failed record's dedup row
-    if doc.idempotency_key:
-        frappe.db.delete(
-            "SyncJobDedup",
-            {
-                "job_type": new_job.job_type,
-                "idempotency_key": doc.idempotency_key,
-                "status": "completed",
-            },
-        )
-        frappe.db.commit()
-
-    doc.status = "Re-driven"
-    doc.re_drive_job = new_job.name
-    doc.re_driven_at = frappe.utils.now_datetime()
+    frappe.db.delete(
+        "SyncJobDedup",
+        {
+            "job_type": new_job.job_type,
+            "idempotency_key": doc.idempotency_key,
+            "status": "completed",
+        },
+    )
+    frappe.db.commit()
 
     # Append to audit log
     entry = {"timestamp": frappe.utils.now_datetime(), "action": "re_driven", "job": new_job.name}
@@ -70,5 +85,7 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     audit.append(entry)
     doc.audit = frappe.as_json(audit)
 
+    doc.re_drive_job = new_job.name
+    doc.re_driven_at = frappe.utils.now_datetime()
     doc.save(ignore_permissions=True)
     frappe.db.commit()
