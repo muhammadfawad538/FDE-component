@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 import frappe
 
 from fde_component.jobs.base import CheckpointedJob
 from fde_component.jobs.exceptions import JobFailed, JobDeadLettered
-from fde_component.jobs.idempotency import IdempotencyKey
+from fde_component.jobs.idempotency import IdempotencyKey, claim_dedup
 from fde_component.doctypes.sync_job_dlq.sync_job_dlq import re_drive
 
 
@@ -239,11 +240,9 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
     def test_claim_fail_skip_increments_processed_and_offset(self):
         """Claim-fail path: another worker already claimed this record.
 
-        NOTE: In the test environment the unique index on (job_type,
-        idempotency_key, status) may not be enforced, so claim_dedup
-        can succeed even when an in_progress row already exists.
-        This test tracks which records process_record actually handles
-        and verifies counters regardless of whether the skip fires.
+        The unique index on (job_type, idempotency_key, status) may not
+        exist in the test environment, so we force claim_dedup to return
+        False for record 0 via mock.patch.
         """
         doc_name = self._make_sync_job_doc("test.skip_offset", total_records=5)
         try:
@@ -262,32 +261,33 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
                 def process_record(self, record):
                     processed_indices.append(record["index"])
 
-            # Pre-create an in_progress dedup row for record 0
             key0 = IdempotencyKey("test.skip_offset", "record-0", "").hex
-            frappe.get_doc({
-                "doctype": "SyncJobDedup",
-                "job_type": "test.skip_offset",
-                "idempotency_key": key0,
-                "source_id": "record-0",
-                "sync_job_id": doc_name,
-                "status": "in_progress",
-            }).insert(ignore_permissions=True)
-            frappe.db.commit()
 
-            job = SkipJob(job_name=doc_name)
-            job.run()
+            original_claim = claim_dedup
+
+            def fake_claim(job_type, key, source_id, sync_job_id):
+                if key.hex == key0:
+                    return False  # simulate claim collision for record 0
+                return original_claim(job_type, key, source_id, sync_job_id)
+
+            with patch("fde_component.jobs.base.claim_dedup", side_effect=fake_claim):
+                job = SkipJob(job_name=doc_name)
+                job.run()
 
             doc = frappe.get_doc("SyncJob", doc_name)
             self.assertEqual(doc.status, "Completed")
 
-            # _processed counts all 5 records
+            # _processed counts all 5 records including the claim-failed one
             self.assertEqual(doc.processed, 5)
 
+            # Record 0 was NOT processed (claim-fail path)
+            self.assertNotIn(0, processed_indices)
+            self.assertEqual(processed_indices, [1, 2, 3, 4])
+
             # Skip paths (dedup-skip, claim-fail) count toward _processed
-            # and offset but do NOT call _should_checkpoint(). The success
-            # path does. In the test environment claim_dedup may succeed
-            # even with a pre-existing in_progress row, so the first
-            # checkpoint fires after record 0 is processed: offset=1.
+            # and offset but do NOT call _should_checkpoint().
+            # The success path does, so first checkpoint fires after
+            # record 1 is processed: offset=2.
             cp = frappe.get_all(
                 "SyncJobCheckpoint",
                 filters={"parent": doc_name},
@@ -295,13 +295,8 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
                 order_by="idx asc",
             )
             self.assertGreaterEqual(len(cp), 1)
-            self.assertEqual(cp[0]["offset"], 1)
-            self.assertEqual(cp[0]["records_processed"], 1)
-
-            # Verify record 0 was actually processed (claim-dedup succeeded
-            # in this test environment despite pre-existing in_progress row)
-            self.assertIn(0, processed_indices)
-            self.assertEqual(processed_indices, [0, 1, 2, 3, 4])
+            self.assertEqual(cp[0]["offset"], 2)
+            self.assertEqual(cp[0]["records_processed"], 2)
         finally:
             self._cleanup_sync_job(doc_name, job_type="test.skip_offset")
 
