@@ -29,9 +29,6 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     # Atomically claim this DLQ entry: only transition to Re-driven if it
     # is not already Re-driven. This prevents two concurrent calls from
     # creating two child jobs for the same failed record.
-    print(f"DEBUG re_drive: BEFORE UPDATE, doc.name={doc.name}, doc.status={doc.status}")
-    before_status = frappe.db.get_value("SyncJobDLQ", doc.name, "status")
-    print(f"DEBUG re_drive: BEFORE UPDATE db_status={before_status}")
     frappe.db.sql(
         """
         UPDATE `tabSyncJobDLQ`
@@ -40,11 +37,7 @@ def re_drive(doc: dict, method: str | None = None) -> None:
         """,
         (doc.name,),
     )
-    rc = frappe.db._cursor.rowcount
-    after_status = frappe.db.get_value("SyncJobDLQ", doc.name, "status")
-    print(f"DEBUG re_drive: AFTER UPDATE rowcount={rc}, db_status={after_status}")
-    if rc == 0:
-        print(f"DEBUG re_drive: SKIPPING child creation (already claimed)")
+    if frappe.db._cursor.rowcount == 0:
         return  # already claimed by another call
 
     new_job = frappe.new_doc("SyncJob")
@@ -97,5 +90,3 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     doc.status = "Re-driven"
     doc.save(ignore_permissions=True)
     frappe.db.commit()
-
-    print(f"DEBUG re_drive END: db_status={frappe.db.get_value('SyncJobDLQ', doc.name, 'status')}")

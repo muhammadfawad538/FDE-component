@@ -333,8 +333,6 @@ class TestReDriveSafety(unittest.TestCase):
         frappe.db.commit()
 
         re_drive(dlq_doc)
-        db_status_after = frappe.db.get_value("SyncJobDLQ", dlq_doc.name, "status")
-        print(f"DEBUG test: after first re_drive, db_status={db_status_after}")
         # Reload from DB to get the updated status
         dlq_doc = frappe.get_doc("SyncJobDLQ", dlq_doc.name)
         re_drive(dlq_doc)
@@ -346,10 +344,10 @@ class TestReDriveSafety(unittest.TestCase):
         )
         self.assertEqual(len(child_jobs), 1, "re_drive must create exactly one child job")
 
-        frappe.db.delete("SyncJob", {"name": parent_doc.name})
+        frappe.db.delete("SyncJobDLQ", {"sync_job": parent_doc.name})
         for cj in child_jobs:
             frappe.delete_doc("SyncJob", cj["name"], ignore_permissions=True)
-        frappe.db.delete("SyncJobDLQ", {"sync_job": parent_doc.name})
+        frappe.db.delete("SyncJob", {"name": parent_doc.name})
         frappe.db.commit()
 
     def test_re_drive_rejects_empty_idempotency_key(self):
@@ -377,8 +375,8 @@ class TestReDriveSafety(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError):
             re_drive(dlq_doc)
 
-        frappe.db.delete("SyncJob", parent_doc.name)
         frappe.db.delete("SyncJobDLQ", {"sync_job": parent_doc.name})
+        frappe.db.delete("SyncJob", parent_doc.name)
         frappe.db.commit()
 
 
