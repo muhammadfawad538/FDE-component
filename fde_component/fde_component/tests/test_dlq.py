@@ -333,6 +333,8 @@ class TestReDriveSafety(unittest.TestCase):
         frappe.db.commit()
 
         re_drive(dlq_doc)
+        db_status_after = frappe.db.get_value("SyncJobDLQ", dlq_doc.name, "status")
+        print(f"DEBUG test: after first re_drive, db_status={db_status_after}")
         # Reload from DB to get the updated status
         dlq_doc = frappe.get_doc("SyncJobDLQ", dlq_doc.name)
         re_drive(dlq_doc)

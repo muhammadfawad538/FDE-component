@@ -94,5 +94,8 @@ def re_drive(doc: dict, method: str | None = None) -> None:
 
     doc.re_drive_job = new_job.name
     doc.re_driven_at = frappe.utils.now_datetime()
+    doc.status = "Re-driven"
     doc.save(ignore_permissions=True)
     frappe.db.commit()
+
+    print(f"DEBUG re_drive END: db_status={frappe.db.get_value('SyncJobDLQ', doc.name, 'status')}")
