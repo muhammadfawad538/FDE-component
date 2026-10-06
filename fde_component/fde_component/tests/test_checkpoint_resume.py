@@ -339,7 +339,6 @@ class TestDLQChecksumLineage(CheckpointTestCase):
                 order_by="idx desc",
                 limit=1,
             )[0]["checksum"]
-            print(f"DEBUG child_cp={child_cp} expected={expected} redriven_key={redriven_key}")
             self.assertEqual(child_cp, expected)
         finally:
             self._cleanup_sync_job(doc_name)

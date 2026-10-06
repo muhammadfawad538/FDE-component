@@ -181,12 +181,14 @@ class CheckpointedJob:
         self._processed: int = 0
         self._any_dead_lettered: bool = False
         self._checksum_hasher = hashlib.sha256()
+        self._checksum_seeded_from_parent: bool = False
         self._last_publish_time: float = 0.0
 
         # Restore parent checksum for redrive jobs (lineage chain)
         parent_checksum = kwargs.get("parent_checksum")
         if parent_checksum:
             self._checksum_hasher = hashlib.sha256(parent_checksum.encode())
+            self._checksum_seeded_from_parent = True
 
         self._setup_signal_handlers()
 
@@ -507,7 +509,8 @@ class CheckpointedJob:
             return None
 
     def _restore_checksum(self) -> None:
-        """Restore the running checksum from the last checkpoint."""
+        """Restore the running checksum from the last checkpoint, or keep
+        the parent seed for brand-new redrive children with no checkpoints yet."""
         last = frappe.get_all(
             "SyncJobCheckpoint",
             filters={"parent": self.job_name},
@@ -517,6 +520,9 @@ class CheckpointedJob:
         )
         if last and last[0].get("checksum"):
             self._checksum_hasher = hashlib.sha256(last[0]["checksum"].encode())
+        elif self._checksum_seeded_from_parent:
+            # No checkpoints yet (redrive child) — preserve the parent seed
+            pass  # self._checksum_hasher is already seeded from parent
         else:
             self._checksum_hasher = hashlib.sha256()
 
