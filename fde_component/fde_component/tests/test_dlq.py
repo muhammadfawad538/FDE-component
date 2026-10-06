@@ -220,7 +220,9 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
             # _processed counts all 5 records including the skipped one
             self.assertEqual(doc.processed, 5)
 
-            # First checkpoint should have offset=1 (skipped record counted)
+            # Skip paths (dedup-skip / claim-fail) count toward _processed and
+            # offset but do NOT call _should_checkpoint(). The first checkpoint
+            # fires after the first successfully-processed record.
             cp = frappe.get_all(
                 "SyncJobCheckpoint",
                 filters={"parent": doc_name},
@@ -228,8 +230,9 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
                 order_by="idx asc",
             )
             self.assertGreaterEqual(len(cp), 1)
-            self.assertEqual(cp[0]["offset"], 1)
-            self.assertEqual(cp[0]["records_processed"], 1)
+            # First checkpoint: records 0 (skipped) + 1 (processed) → offset=2
+            self.assertEqual(cp[0]["offset"], 2)
+            self.assertEqual(cp[0]["records_processed"], 2)
         finally:
             self._cleanup_sync_job(doc_name, job_type="test.skip_offset")
 
@@ -271,7 +274,9 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
             # _processed counts all 5 records including the claim-failed one
             self.assertEqual(doc.processed, 5)
 
-            # First checkpoint should have offset=1 (claim-fail record counted)
+            # Skip paths count toward _processed and offset but do NOT call
+            # _should_checkpoint(). First checkpoint fires after first
+            # successfully-processed record: records 0 (claim-fail) + 1 → offset=2.
             cp = frappe.get_all(
                 "SyncJobCheckpoint",
                 filters={"parent": doc_name},
@@ -279,8 +284,8 @@ class TestSkipPathsIncrementCounters(DLQTestCase):
                 order_by="idx asc",
             )
             self.assertGreaterEqual(len(cp), 1)
-            self.assertEqual(cp[0]["offset"], 1)
-            self.assertEqual(cp[0]["records_processed"], 1)
+            self.assertEqual(cp[0]["offset"], 2)
+            self.assertEqual(cp[0]["records_processed"], 2)
         finally:
             self._cleanup_sync_job(doc_name, job_type="test.skip_offset")
 
