@@ -348,6 +348,40 @@ class TestDLQChecksumLineage(CheckpointTestCase):
             frappe.db.delete("SyncJobDLQ", {"sync_job": doc_name})
             frappe.db.commit()
 
+    def test_restore_checksum_preserves_parent_seed_when_no_checkpoint(self):
+        """_restore_checksum must keep the parent seed when no checkpoints exist
+        (brand-new redrive child), and restore from checkpoint when one does."""
+        # No checkpoints in DB — should preserve parent seed
+        job = CountingImportJob(job_name="test-job", total=5, parent_checksum="abc123")
+        job._restore_checksum()
+        self.assertEqual(
+            job._checksum_hasher.hexdigest(),
+            hashlib.sha256("abc123".encode()).hexdigest(),
+        )
+
+        # Write a checkpoint, then restore — should use checkpoint value
+        frappe.get_doc({
+            "doctype": "SyncJobCheckpoint",
+            "parent": "test-job",
+            "parentfield": "checkpoints",
+            "parenttype": "SyncJob",
+            "offset": 1,
+            "records_processed": 1,
+            "checksum": "checkpoint_checksum_value",
+        }).insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        job2 = CountingImportJob(job_name="test-job", total=5, parent_checksum="abc123")
+        job2._restore_checksum()
+        self.assertEqual(
+            job2._checksum_hasher.hexdigest(),
+            hashlib.sha256("checkpoint_checksum_value".encode()).hexdigest(),
+        )
+
+        # Cleanup
+        frappe.db.delete("SyncJobCheckpoint", {"parent": "test-job"})
+        frappe.db.commit()
+
 
 class TestCheckpointFrequency(CheckpointTestCase):
 
