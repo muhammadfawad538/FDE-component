@@ -131,6 +131,7 @@ def claim_dedup(job_type: str, key: IdempotencyKey, source_id: str, sync_job_id:
         doc.source_id = source_id
         doc.sync_job_id = sync_job_id
         doc.status = "in_progress"
+        doc.claimed_by = sync_job_id
         doc.insert(ignore_permissions=True)
         frappe.db.commit()
         return True
@@ -167,21 +168,24 @@ def complete_dedup(job_type: str, key: IdempotencyKey) -> None:
 def reclaim_stale_claims(job_type: str, older_than_seconds: int = 3600) -> int:
     """
     Delete stale 'in_progress' dedup rows so the record can be reclaimed
-    and retried. A claim is considered stale if it has not been updated
-    within the given time window.
+    and retried. A claim is considered stale only if the claiming job is
+    not currently Running — this prevents stealing records from a slow-but-alive
+    worker.
 
     Returns the number of rows deleted.
     """
     try:
-        result = frappe.db.sql(
-            """
-            DELETE FROM `tabSyncJobDedup`
-            WHERE `job_type` = %s
-              AND `status` = 'in_progress'
-              AND `first_seen` < DATE_SUB(NOW(), INTERVAL %s SECOND)
-            """,
-            (job_type, older_than_seconds),
-        )
+        result = frappe.db.sql("""
+            DELETE d
+            FROM `tabSyncJobDedup` d
+            INNER JOIN `tabSyncJob` j ON d.claimed_by = j.name
+            WHERE d.`job_type` = %s
+              AND d.`status` = 'in_progress'
+              AND (
+                j.`status` NOT IN ('Running', 'Queued')
+                OR d.`first_seen` < DATE_SUB(NOW(), INTERVAL %s SECOND)
+              )
+        """, (job_type, older_than_seconds))
         frappe.db.commit()
         return result[0][0] if result and result[0] else 0
     except Exception:

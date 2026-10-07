@@ -64,7 +64,7 @@ jobs:
 
           cd $GITHUB_WORKSPACE
           pip install -q -e fde_bench/apps/frappe
-          fde_bench/env/bin/python -m pip install -q whoosh
+          fde_bench/env/bin/python -m pip install -q whoosh pytest
 
           # Diagnostics: show installed Click and bench versions
           python3 -c "import click; print('Click version:', click.__version__)"
@@ -73,7 +73,10 @@ jobs:
           cp -r fde_component fde_bench/apps/fde_component
 
           # Make fde_component importable in the bench Python environment
-          fde_bench/env/bin/python -m pip install -q -e fde_bench/apps/fde_component
+          fde_bench/env/bin/python -m pip install -e fde_bench/apps/fde_component
+
+          # Verify import works
+          fde_bench/env/bin/python -c "import fde_component; print('OK:', fde_component.__file__)"
 
           echo "=== Python ==="
           python3 --version
@@ -121,11 +124,43 @@ jobs:
           done
 
           cd fde_bench
-          bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
+          export PYTHONPATH="${PYTHONPATH:-}:$(pwd)/apps/fde_component:$(pwd)/apps/frappe"
 
+          # Register fde_component BEFORE bench new-site so Frappe includes
+          # it in the module map from the start
           printf "frappe\nfde_component\n" > sites/apps.txt
+
+          mkdir -p logs test.localhost/logs
+          bench new-site test.localhost --mariadb-root-password test --admin-password admin --force
           echo "=== apps.txt ==="
           cat -A sites/apps.txt
 
           bench --site test.localhost install-app fde_component
+
+          # ── Diagnostics: module resolution ──────────────────────────────────────
+          printf '%s\n' \
+            "import frappe, os" \
+            "frappe.init(site='test.localhost', sites_path='sites')" \
+            "frappe.connect()" \
+            "print('=== Frappe version ===')" \
+            "print(frappe.__version__)" \
+            "print('=== frappe.local.module_app ===')" \
+            "print(frappe.local.module_app)" \
+            "print('=== get_module_app(\"FDE Component\") ===')" \
+            "print(frappe.get_module_app('FDE Component'))" \
+            "print('=== Module Def: FDE Component ===')" \
+            "m = frappe.get_doc('Module Def', 'FDE Component')" \
+            "print('name:', m.name)" \
+            "print('app_name:', m.app_name)" \
+            "print('=== DocType: SyncJob ===')" \
+            "d = frappe.get_doc('DocType', 'SyncJob')" \
+            "print('name:', d.name)" \
+            "print('module:', d.module)" \
+            "print('custom:', d.custom)" \
+            "print('=== fde_component/modules.txt ===')" \
+            "p = os.path.join(frappe.get_app_path('fde_component'), 'modules.txt')" \
+            "print(open(p).read() if os.path.exists(p) else 'NOT FOUND: ' + p)" \
+            > /tmp/diag_module.py
+          cd fde_bench && env/bin/python /tmp/diag_module.py
+
           bench --site test.localhost run-tests --app fde_component

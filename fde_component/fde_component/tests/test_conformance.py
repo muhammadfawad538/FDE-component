@@ -10,6 +10,7 @@ These tests can run without a live Frappe DB.
 from __future__ import annotations
 
 import pytest
+import unittest
 
 from fde_component.jobs.base import CheckpointedJob
 from fde_component.jobs.idempotency import IdempotencyKey
@@ -19,7 +20,7 @@ from fde_component.jobs.exceptions import JobInterrupted, JobFailed, JobDeadLett
 # ── SP-05-01: Checkpointed job base class ─────────────────────────────────────
 
 
-class TestCheckpointedJobContract:
+class TestCheckpointedJobContract(unittest.TestCase):
 
     def test_subclass_has_job_type(self):
         class MyJob(CheckpointedJob):
@@ -51,7 +52,7 @@ class TestCheckpointedJobContract:
 # ── SP-05-02: Status lifecycle ────────────────────────────────────────────────
 
 
-class TestStatusLifecycle:
+class TestStatusLifecycle(unittest.TestCase):
 
     def test_queued_is_initial_status(self):
         doc = type("FakeDoc", (), {"status": "Queued", "save": lambda: None})()
@@ -67,7 +68,7 @@ class TestStatusLifecycle:
 # ── SP-05-03: Idempotency ─────────────────────────────────────────────────────
 
 
-class TestIdempotencyConformance:
+class TestIdempotencyConformance(unittest.TestCase):
 
     def test_key_is_deterministic(self):
         k1 = IdempotencyKey("job", "src", "content")
@@ -93,7 +94,7 @@ class TestIdempotencyConformance:
 # ── SP-05-04: Retry and DLQ ───────────────────────────────────────────────────
 
 
-class TestRetryDLQ:
+class TestRetryDLQ(unittest.TestCase):
 
     def test_dead_lettered_exception_exists(self):
         assert issubclass(JobDeadLettered, Exception)
@@ -124,7 +125,7 @@ class TestRetryDLQ:
 # ── SP-05-05: Dedup exception handling ────────────────────────────────────────
 
 
-class TestDedupExceptionHandling:
+class TestDedupExceptionHandling(unittest.TestCase):
 
     def test_dedup_duplicate_exception_exists(self):
         assert issubclass(DedupDuplicate, Exception)
@@ -136,7 +137,7 @@ class TestDedupExceptionHandling:
 # ── SP-05-06: Checkpoint cadence ──────────────────────────────────────────────
 
 
-class TestCheckpointCadence:
+class TestCheckpointCadence(unittest.TestCase):
 
     def test_default_cadence_is_1000_records(self):
         assert CheckpointedJob.checkpoint_every == 1000
