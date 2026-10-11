@@ -483,3 +483,51 @@ class TestRedriveScoping(DLQTestCase):
                 except Exception:
                     pass
             frappe.db.commit()
+
+
+class TestReDriveChildFailure(DLQTestCase):
+    """
+    If child-job creation fails after the DLQ row was claimed
+    'Re-driven', re_drive must restore the row's previous
+    status and re-raise.
+    """
+
+    def test_failed_child_creation_restores_dlq_status(self):
+        doc_name = self._make_sync_job_doc("test.redrive_scope", total_records=5)
+        try:
+            # Commit the parent SyncJob first so the claim's
+            # UPDATE and the restore see committed state.
+            dlq_doc = frappe.get_doc({
+                "doctype": "SyncJobDLQ",
+                "sync_job": doc_name,
+                "idempotency_key": IdempotencyKey("test.redrive_scope", "record-0", "").hex,
+                "status": "Dead Lettered",
+            })
+            dlq_doc.insert(ignore_permissions=True)
+            frappe.db.commit()
+
+            with patch(
+                "frappe.new_doc",
+                side_effect=RuntimeError("child creation failed"),
+            ) as mock_new_doc:
+                with self.assertRaises(RuntimeError) as ctx:
+                    re_drive(dlq_doc)
+                self.assertIn("child creation failed", str(ctx.exception))
+
+            # (a) the exception propagated — asserted above.
+            # (b) the DLQ status is restored to its pre-claim value.
+            restored_status = frappe.db.get_value("SyncJobDLQ", dlq_doc.name, "status")
+            self.assertEqual(restored_status, "Dead Lettered")
+
+            # No child job was created.
+            child_jobs = frappe.get_all(
+                "SyncJob",
+                filters={"parent_job": doc_name},
+                fields=["name"],
+            )
+            self.assertEqual(len(child_jobs), 0)
+            # frappe.new_doc was actually attempted (sanity check
+            # that the failure path was reached, not short-circuited).
+            self.assertGreaterEqual(mock_new_doc.call_count, 1)
+        finally:
+            self._cleanup_sync_job(doc_name, job_type="test.redrive_scope")
