@@ -1,0 +1,7 @@
+2026-09-19 05:05:25,313 DEBUG cd fde_bench && uv venv env --seed --python python3
+2026-09-19 05:05:26,729 LOG Getting frappe
+2026-09-19 05:05:26,729 DEBUG cd fde_bench/apps && git clone https://github.com/frappe/frappe.git  --depth 1 --origin upstream
+2026-09-19 05:05:33,791 LOG Installing frappe
+2026-09-19 05:05:33,809 DEBUG cd /workspaces/FDE-component/fde_bench && uv pip install --quiet -e /workspaces/FDE-component/fde_bench/apps/frappe  --python /workspaces/FDE-component/fde_bench/env/bin/python
+2026-09-19 05:05:35,935 WARNING cd /workspaces/FDE-component/fde_bench && uv pip install --quiet -e /workspaces/FDE-component/fde_bench/apps/frappe  --python /workspaces/FDE-component/fde_bench/env/bin/python executed with exit code 1
+2026-09-19 05:05:35,940 WARNING /usr/local/bin/bench init --skip-redis-config-generation fde_bench executed with exit code 167
