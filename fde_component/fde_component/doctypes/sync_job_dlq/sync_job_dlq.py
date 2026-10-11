@@ -26,6 +26,10 @@ def re_drive(doc: dict, method: str | None = None) -> None:
 
     parent = frappe.get_doc("SyncJob", doc.sync_job)
 
+    # Remember the row's current status so a failed child
+    # creation can restore it after the claim below.
+    previous_status = frappe.db.get_value("SyncJobDLQ", doc.name, "status")
+
     # Atomically claim this DLQ entry: only transition to Re-driven if it
     # is not already Re-driven. This prevents two concurrent calls from
     # creating two child jobs for the same failed record.
@@ -40,33 +44,45 @@ def re_drive(doc: dict, method: str | None = None) -> None:
     if frappe.db._cursor.rowcount == 0:
         return  # already claimed by another call
 
-    new_job = frappe.new_doc("SyncJob")
-    new_job.job_type = parent.job_type
-    new_job.status = "Queued"
-    new_job.parent_job = parent.name
-
-    # Scope the new job to ONLY the failed record
     try:
-        source_config = json.loads(parent.source_config or "{}")
+        new_job = frappe.new_doc("SyncJob")
+        new_job.job_type = parent.job_type
+        new_job.status = "Queued"
+        new_job.parent_job = parent.name
+
+        # Scope the new job to ONLY the failed record
+        try:
+            source_config = json.loads(parent.source_config or "{}")
+        except Exception:
+            source_config = {}
+
+        # Inherit parent's checksum lineage: look up parent's last checkpoint
+        parent_last_checksum = frappe.db.get_value(
+            "SyncJobCheckpoint",
+            {"parent": parent.name},
+            "checksum",
+            order_by="idx desc",
+        )
+        if parent_last_checksum:
+            source_config["parent_checksum"] = parent_last_checksum
+
+        source_config["redrive_key"] = doc.idempotency_key
+        source_config["redrive_parent"] = doc.sync_job
+        new_job.source_config = json.dumps(source_config)
+
+        new_job.insert(ignore_permissions=True)
+        frappe.db.commit()
     except Exception:
-        source_config = {}
-
-    # Inherit parent's checksum lineage: look up parent's last checkpoint
-    parent_last_checksum = frappe.db.get_value(
-        "SyncJobCheckpoint",
-        {"parent": parent.name},
-        "checksum",
-        order_by="idx desc",
-    )
-    if parent_last_checksum:
-        source_config["parent_checksum"] = parent_last_checksum
-
-    source_config["redrive_key"] = doc.idempotency_key
-    source_config["redrive_parent"] = doc.sync_job
-    new_job.source_config = json.dumps(source_config)
-
-    new_job.insert(ignore_permissions=True)
-    frappe.db.commit()
+        # Child creation failed after the row was claimed
+        # 'Re-driven'. Restore the pre-claim status so the
+        # entry stays re-driveable, then re-raise so the
+        # caller sees the failure. No frappe.db.rollback()
+        # here: the claim and the restore share the caller's
+        # transaction, so a rollback would discard the
+        # caller's uncommitted work too.
+        frappe.db.set_value("SyncJobDLQ", doc.name, {"status": previous_status})
+        frappe.db.commit()
+        raise
 
     # Clear ONLY the failed record's dedup row
     frappe.db.delete(

@@ -54,7 +54,7 @@ jobs:
           cd "$BENCH_DIR/apps/frappe" && git checkout 012667b9c4e7f66d5e1ff5858d2e922331d4300a
           cd "$GITHUB_WORKSPACE"
           pip install -q -e "$BENCH_DIR/apps/frappe"
-          "$PY" -m pip install -q whoosh pytest
+          "$PY" -m pip install -q whoosh pytest pdfkit
           cp -r fde_component "$BENCH_DIR/apps/fde_component"
 
           # Build module subpackage in the CI copy so Frappe can import
