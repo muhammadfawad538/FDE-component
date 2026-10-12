@@ -11,7 +11,7 @@ expression fires now.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import frappe
 from frappe.utils import cint, get_datetime, now_datetime
@@ -64,6 +64,13 @@ def _is_due(cron: str, last_fired: str | None, now: datetime) -> bool:
     """
     Return True if *cron* fires between *last_fired* and *now*.
     Uses the ``croniter`` library (bundled with Frappe).
+
+    A schedule that never fired (NULL last_fired) is due on
+    the first sweep: there is no previous fire to wait for,
+    so the next cron time after "never" is the most recent
+    one at or before *now*. Schedules with a last_fired
+    value are unaffected - their next fire is computed from
+    last_fired as before.
     """
     try:
         from croniter import croniter
@@ -74,7 +81,11 @@ def _is_due(cron: str, last_fired: str | None, now: datetime) -> bool:
     if last_fired:
         prev = get_datetime(last_fired)
     else:
-        prev = now  # never fired before → treat as due
+        # Never fired - anchor far enough in the past that
+        # the next cron time falls at or before now. One
+        # day covers any sane cron expression (sub-day
+        # periods fire daily or more often).
+        prev = now - timedelta(days=1)
 
     try:
         itr = croniter(cron, prev)
