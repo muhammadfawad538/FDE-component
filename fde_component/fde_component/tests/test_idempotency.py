@@ -290,3 +290,71 @@ class TestClaimOwnership(unittest.TestCase):
         self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
         # A second completion attempt finds no in_progress row
         self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, self.roundtrip_job))
+
+
+class TestJobLoopCompletesDedup(unittest.TestCase):
+    """
+    Run a real job through CheckpointedJob and assert every
+    processed record's SyncJobDedup row ends 'completed' —
+    the ownership-checked UPDATE must still mark rows
+    completed in production.
+    """
+
+    def setUp(self):
+        import frappe
+        frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
+        frappe.db.commit()
+        self.job = frappe.get_doc({
+            "doctype": "SyncJob",
+            "job_type": TEST_JOB_TYPE,
+            "status": "Queued",
+            "total_records": 3,
+            "processed": 0,
+            "created_via": "API",
+        })
+        self.job.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+    def tearDown(self):
+        import frappe
+        frappe.db.delete("SyncJobCheckpoint", {"parent": self.job.name})
+        frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
+        frappe.db.delete("SyncJob", {"name": self.job.name})
+        frappe.db.commit()
+
+    def test_job_loop_marks_every_record_completed(self):
+        from fde_component.jobs.base import CheckpointedJob
+
+        class LoopJob(CheckpointedJob):
+            job_type = TEST_JOB_TYPE
+            max_retries = 1
+            checkpoint_every = 1000
+            checkpoint_seconds = 999.0
+
+            def iter_records(self, offset, redrive_key=None):
+                for i in range(offset, 3):
+                    yield {"id": f"record-{i}", "index": i}
+
+            def process_record(self, record):
+                pass
+
+        import frappe
+        job = LoopJob(job_name=self.job.name)
+        job.run()
+
+        doc = frappe.get_doc("SyncJob", self.job.name)
+        self.assertEqual(doc.status, "Completed")
+        self.assertEqual(doc.processed, 3)
+
+        # Every record must have a completed dedup row
+        rows = frappe.db.get_all(
+            "SyncJobDedup",
+            filters={"job_type": TEST_JOB_TYPE},
+            fields=["idempotency_key", "status"],
+        )
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertEqual(
+                row.status, "completed",
+                f"record {row.idempotency_key[:8]} not completed",
+            )
