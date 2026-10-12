@@ -186,6 +186,12 @@ class TestClaimOwnership(unittest.TestCase):
     written before claimed_by existed).
 
     Requires a live Frappe DB (run via `bench run-tests`).
+
+    SyncJobDedup.sync_job_id is a Link to SyncJob, so every
+    job name written to it must exist as a real SyncJob doc.
+    SyncJob uses autoname (SJ-.#####), so fixtures are created
+    in setUp and their assigned names are used throughout —
+    claim_dedup cannot take ignore_links.
     """
 
     def setUp(self):
@@ -193,10 +199,37 @@ class TestClaimOwnership(unittest.TestCase):
         frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
         frappe.db.commit()
 
+        # Our own job, plus the "other worker" jobs used by
+        # the foreign-claim and legacy-row tests.
+        self.own_job = self._make_sync_job("own")
+        self.foreign_job = self._make_sync_job("foreign")
+        self.legacy_job = self._make_sync_job("legacy")
+        self.roundtrip_job = self._make_sync_job("roundtrip")
+        frappe.db.commit()
+
     def tearDown(self):
         import frappe
+        # Dedup rows first (they link to the jobs), then the
+        # jobs themselves — then a single commit.
         frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
+        for name in (self.own_job, self.foreign_job,
+                     self.legacy_job, self.roundtrip_job):
+            frappe.db.delete("SyncJob", {"name": name})
         frappe.db.commit()
+
+    def _make_sync_job(self, label: str) -> str:
+        """Create a SyncJob fixture and return its assigned name."""
+        import frappe
+        doc = frappe.get_doc({
+            "doctype": "SyncJob",
+            "job_type": TEST_JOB_TYPE,
+            "status": "Queued",
+            "total_records": 0,
+            "processed": 0,
+            "created_via": "API",
+        })
+        doc.insert(ignore_permissions=True)
+        return doc.name
 
     def _insert_claim(self, key, claimed_by):
         """Insert an in_progress dedup row with a given claimed_by."""
@@ -205,7 +238,7 @@ class TestClaimOwnership(unittest.TestCase):
         doc.job_type = TEST_JOB_TYPE
         doc.idempotency_key = key.hex
         doc.source_id = key.hex[:8]
-        doc.sync_job_id = TEST_SYNC_JOB
+        doc.sync_job_id = self.own_job
         doc.status = "in_progress"
         doc.claimed_by = claimed_by
         doc.insert(ignore_permissions=True)
@@ -213,15 +246,15 @@ class TestClaimOwnership(unittest.TestCase):
 
     def test_own_claim_completes(self):
         key = _make_key(f"own-{id(self)}")
-        self._insert_claim(key, TEST_SYNC_JOB)
-        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, TEST_SYNC_JOB))
+        self._insert_claim(key, self.own_job)
+        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, self.own_job))
         self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
 
     def test_foreign_claim_not_completed(self):
         key = _make_key(f"foreign-{id(self)}")
-        self._insert_claim(key, "SJ-OTHER-WORKER")
+        self._insert_claim(key, self.foreign_job)
         # Another worker's claim must NOT be completed by us
-        self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, TEST_SYNC_JOB))
+        self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, self.own_job))
         # Row still in_progress, owned by the other worker
         import frappe
         status = frappe.db.get_value(
@@ -235,23 +268,25 @@ class TestClaimOwnership(unittest.TestCase):
         key = _make_key(f"empty-{id(self)}")
         # Legacy row: claimed_by is NULL (backfilled rows, old patches)
         self._insert_claim(key, None)
-        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, TEST_SYNC_JOB))
+        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, self.own_job))
         self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
 
     def test_no_sync_job_id_completes_legacy_row(self):
         key = _make_key(f"legacy-{id(self)}")
-        self._insert_claim(key, "SJ-SOME-OTHER")
+        self._insert_claim(key, self.legacy_job)
         # sync_job_id omitted (legacy mark_dedup path): ownership
         # check is skipped, preserving pre-existing behavior
         self.assertTrue(complete_dedup(TEST_JOB_TYPE, key))
         self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
 
     def test_claim_and_complete_roundtrip(self):
-        """Full lifecycle: claim as SJ-A, complete as SJ-A, verify
-        the row is completed and no longer in_progress."""
+        """Full lifecycle: claim as our job, complete as our job,
+        verify the row is completed and no longer in_progress."""
         key = _make_key(f"roundtrip-{id(self)}")
-        self.assertTrue(claim_dedup(TEST_JOB_TYPE, key, "msg-rt", "SJ-A"))
-        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, "SJ-A"))
+        self.assertTrue(
+            claim_dedup(TEST_JOB_TYPE, key, "msg-rt", self.roundtrip_job)
+        )
+        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, self.roundtrip_job))
         self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
         # A second completion attempt finds no in_progress row
-        self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, "SJ-A"))
+        self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, self.roundtrip_job))
