@@ -160,7 +160,7 @@ def complete_dedup(job_type: str, key: IdempotencyKey, sync_job_id: str | None =
     was processed by someone else).
     """
     try:
-        result = frappe.db.sql(
+        frappe.db.sql(
             """
             UPDATE `tabSyncJobDedup`
             SET `status` = 'completed'
@@ -169,8 +169,11 @@ def complete_dedup(job_type: str, key: IdempotencyKey, sync_job_id: str | None =
             """,
             (job_type, key.hex, sync_job_id, sync_job_id),
         )
+        # frappe.db.sql() returns () for a non-SELECT statement,
+        # so read the affected-row count off the cursor directly
+        # (the same pattern re_drive and the runner use).
+        rowcount = frappe.db._cursor.rowcount or 0
         frappe.db.commit()
-        rowcount = result[0][0] if result and result[0] else 0
         return rowcount > 0
     except Exception:
         frappe.db.rollback()
