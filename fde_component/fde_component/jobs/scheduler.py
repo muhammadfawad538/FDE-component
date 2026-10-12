@@ -88,38 +88,74 @@ def _is_due(cron: str, last_fired: str | None, now: datetime) -> bool:
 def _enqueue_schedule(sched: dict, now: datetime) -> None:
     """
     Create a SyncJob doc for *sched* and enqueue it via Frappe RQ.
+
+    The schedule's slot is claimed BEFORE the job is created:
+    an atomic, NULL-safe UPDATE on last_fired. Only the sweep
+    that flips the row creates a job; a second overlapping
+    sweep (or a second scheduler process) sees rows affected 0
+    and returns without creating a job.
     """
-    source_config = {}
-    if sched.get("source_config"):
-        try:
-            source_config = frappe.parse_json(sched["source_config"])
-        except Exception:
-            source_config = {}
-
-    # Build job name
-    job_name = f"sync-{sched['job_type']}-{int(now.timestamp())}"
-
-    sync_job = frappe.new_doc("SyncJob")
-    sync_job.job_type = sched["job_type"]
-    sync_job.status = "Queued"
-    sync_job.created_via = "Scheduler"
-    sync_job.source_config = sched.get("source_config", "{}")
-    sync_job.total_records = source_config.get("total_records")
-    sync_job.insert(ignore_permissions=True)
-    frappe.db.commit()
-
-    # Enqueue via RQ — the worker picks it up
-    frappe.enqueue(
-        method="fde_component.jobs.runner.run_job",
-        queue="default",
-        job_id=sync_job.name,
-        timeout=7200,  # 2 hours — override per job type if needed
-        sync_job_name=sync_job.name,
-        job_type=sched["job_type"],
+    # Read the previous last_fired so a failed run can restore it
+    previous_last_fired = frappe.db.get_value(
+        "SyncSchedule", sched["name"], "last_fired"
     )
 
-    # Update last_fired
-    frappe.db.set_value("SyncSchedule", sched["name"], "last_fired", now)
+    # Claim the slot: only succeed if last_fired still holds
+    # the value this sweep read (NULL-safe comparison covers
+    # schedules that never fired).
+    frappe.db.sql(
+        """
+        UPDATE `tabSyncSchedule`
+        SET `last_fired` = %s
+        WHERE `name` = %s AND (`last_fired` <=> %s)
+        """,
+        (now, sched["name"], previous_last_fired),
+    )
+    # frappe.db.sql() returns () for a non-SELECT statement,
+    # so read the affected-row count off the cursor directly.
+    claimed = (frappe.db._cursor.rowcount or 0) > 0
     frappe.db.commit()
+    if not claimed:
+        # Another sweep already claimed this slot
+        return
+
+    try:
+        source_config = {}
+        if sched.get("source_config"):
+            try:
+                source_config = frappe.parse_json(sched["source_config"])
+            except Exception:
+                source_config = {}
+
+        # Build job name
+        job_name = f"sync-{sched['job_type']}-{int(now.timestamp())}"
+
+        sync_job = frappe.new_doc("SyncJob")
+        sync_job.job_type = sched["job_type"]
+        sync_job.status = "Queued"
+        sync_job.created_via = "Scheduler"
+        sync_job.source_config = sched.get("source_config", "{}")
+        sync_job.total_records = source_config.get("total_records")
+        sync_job.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        # Enqueue via RQ — the worker picks it up
+        frappe.enqueue(
+            method="fde_component.jobs.runner.run_job",
+            queue="default",
+            job_id=sync_job.name,
+            timeout=7200,  # 2 hours — override per job type if needed
+            sync_job_name=sync_job.name,
+            job_type=sched["job_type"],
+        )
+    except Exception:
+        # Job creation or enqueue failed after the slot was
+        # claimed — restore last_fired so the next sweep can
+        # retry, then re-raise so the caller sees the failure.
+        frappe.db.set_value(
+            "SyncSchedule", sched["name"], "last_fired", previous_last_fired
+        )
+        frappe.db.commit()
+        raise
 
     logger.info("Enqueued SyncJob %s for schedule %s", sync_job.name, sched["name"])
