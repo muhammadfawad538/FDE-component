@@ -95,10 +95,12 @@ def _enqueue_schedule(sched: dict, now: datetime) -> None:
     sweep (or a second scheduler process) sees rows affected 0
     and returns without creating a job.
     """
-    # Read the previous last_fired so a failed run can restore it
-    previous_last_fired = frappe.db.get_value(
-        "SyncSchedule", sched["name"], "last_fired"
-    )
+    # The claim must compare against the value the sweep
+    # saw when it decided the schedule was due (sched's
+    # last_fired), not a fresh DB read - a second overlapping
+    # call with the same stale sched would otherwise read
+    # the first call's value and win the claim too.
+    previous_last_fired = sched.get("last_fired")
 
     # Claim the slot: only succeed if last_fired still holds
     # the value this sweep read (NULL-safe comparison covers
@@ -119,6 +121,7 @@ def _enqueue_schedule(sched: dict, now: datetime) -> None:
         # Another sweep already claimed this slot
         return
 
+    sync_job = None
     try:
         source_config = {}
         if sched.get("source_config"):
@@ -139,19 +142,29 @@ def _enqueue_schedule(sched: dict, now: datetime) -> None:
         sync_job.insert(ignore_permissions=True)
         frappe.db.commit()
 
-        # Enqueue via RQ — the worker picks it up
+        # Enqueue via RQ - the worker picks it up
         frappe.enqueue(
             method="fde_component.jobs.runner.run_job",
             queue="default",
             job_id=sync_job.name,
-            timeout=7200,  # 2 hours — override per job type if needed
+            timeout=7200,  # 2 hours - override per job type if needed
             sync_job_name=sync_job.name,
             job_type=sched["job_type"],
         )
     except Exception:
         # Job creation or enqueue failed after the slot was
-        # claimed — restore last_fired so the next sweep can
-        # retry, then re-raise so the caller sees the failure.
+        # claimed. Remove the inserted SyncJob if it exists
+        # (skip if we never got that far), restore last_fired
+        # so the next sweep can retry, then re-raise so the
+        # caller sees the failure.
+        if sync_job is not None:
+            try:
+                frappe.delete_doc(
+                    "SyncJob", sync_job.name,
+                    force=True, ignore_permissions=True,
+                )
+            except Exception:
+                pass  # do not mask the original exception
         frappe.db.set_value(
             "SyncSchedule", sched["name"], "last_fired", previous_last_fired
         )

@@ -75,18 +75,21 @@ class TestEnqueueScheduleRace(SchedulerTestCase):
     """
 
     def test_overlapping_sweeps_fire_once(self):
-        """Two calls with the same stale sched object must
+        """Two calls with the same stale sched dict must
         create exactly one SyncJob and one enqueue call."""
         import frappe
-        sched_name = self._make_schedule(
-            last_fired=now_datetime() - timedelta(minutes=10),
-        )
+        previous = now_datetime() - timedelta(minutes=10)
+        sched_name = self._make_schedule(last_fired=previous)
+
+        # ONE sched dict carrying the OLD last_fired, as
+        # the sweep saw it when it decided the schedule
+        # was due. The same stale dict goes to both calls.
         sched = self._get_sched(sched_name)
         now = now_datetime()
 
         with patch("frappe.enqueue") as mock_enqueue:
             _enqueue_schedule(sched, now)
-            # Second overlapping sweep — same stale sched
+            # Second overlapping sweep - same stale sched
             _enqueue_schedule(sched, now)
 
         jobs = frappe.db.count("SyncJob", {"job_type": TEST_JOB_TYPE})
@@ -95,7 +98,8 @@ class TestEnqueueScheduleRace(SchedulerTestCase):
 
     def test_failed_enqueue_restores_last_fired(self):
         """If enqueue raises after the claim, the exception
-        propagates and last_fired is restored."""
+        propagates, last_fired is restored, and no SyncJob
+        is left behind."""
         import frappe
         previous = now_datetime() - timedelta(minutes=10)
         sched_name = self._make_schedule(last_fired=previous)
@@ -108,7 +112,7 @@ class TestEnqueueScheduleRace(SchedulerTestCase):
 
         restored = frappe.db.get_value("SyncSchedule", sched_name, "last_fired")
         self.assertEqual(restored, previous)
-        # No job was left behind
+        # The inserted SyncJob must be cleaned up
         self.assertEqual(frappe.db.count("SyncJob", {"job_type": TEST_JOB_TYPE}), 0)
 
     def test_same_job_type_two_schedules_distinct_names(self):
