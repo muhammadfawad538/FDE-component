@@ -24,6 +24,7 @@ scheduler_events = {
         # Every 5 minutes: sweep active SyncSchedule docs and enqueue due jobs.
         "*/5 * * * *": [
             "fde_component.jobs.scheduler.enqueue_due_schedules",
+            "fde_component.jobs.recovery.recover_stalled_jobs",
         ],
     },
     "daily": [],

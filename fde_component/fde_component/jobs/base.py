@@ -40,6 +40,7 @@ from .idempotency import (
     check_dedup,
     claim_dedup,
     complete_dedup,
+    reclaim_own_claims,
     reclaim_stale_claims,
 )
 
@@ -281,8 +282,12 @@ class CheckpointedJob:
                     offset += 1
                     continue
 
-                # Reclaim stale claims from crashed workers before claiming
+                # Reclaim stale claims from crashed workers before claiming.
+                # Also reclaim this job's own stale in_progress rows from a
+                # previous run: the job is not Running concurrently with
+                # itself, so its own claims are safe to reclaim.
                 reclaim_stale_claims(self.job_type)
+                reclaim_own_claims(self.job_type, self.job_name)
 
                 # Phase 1: claim the record
                 if not claim_dedup(self.job_type, key, self._source_id(record), self.job_name):
