@@ -197,14 +197,17 @@ def reclaim_own_claims(job_type: str, sync_job_id: str) -> int:
     Returns the number of rows deleted.
     """
     try:
-        result = frappe.db.sql("""
+        frappe.db.sql("""
             DELETE FROM `tabSyncJobDedup`
             WHERE `job_type` = %s
               AND `status` = 'in_progress'
               AND `claimed_by` = %s
         """, (job_type, sync_job_id))
+        # frappe.db.sql() returns () for a non-SELECT statement,
+        # so read the affected-row count off the cursor directly.
+        rowcount = frappe.db._cursor.rowcount or 0
         frappe.db.commit()
-        return result[0][0] if result and result[0] else 0
+        return rowcount
     except Exception:
         frappe.db.rollback()
         return 0
