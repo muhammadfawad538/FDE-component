@@ -304,7 +304,7 @@ class CheckpointedJob:
                     )
                 except JobDeadLettered:
                     # Phase 2a: mark as completed so resume skips it
-                    complete_dedup(self.job_type, key)
+                    complete_dedup(self.job_type, key, self.job_name)
                     self._checksum_hasher.update(key.hex.encode())
                     self._processed += 1
                     self._publish_progress(total)
@@ -317,7 +317,7 @@ class CheckpointedJob:
                     continue
 
                 # Phase 2b: mark as completed
-                complete_dedup(self.job_type, key)
+                complete_dedup(self.job_type, key, self.job_name)
                 self._checksum_hasher.update(key.hex.encode())
                 self._processed += 1
 
