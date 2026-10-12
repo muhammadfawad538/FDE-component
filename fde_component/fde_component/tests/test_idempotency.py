@@ -23,10 +23,18 @@ the DB index is the actual concurrency guard.
 from __future__ import annotations
 
 import hashlib
+import unittest
 
 import pytest
 
-from fde_component.jobs.idempotency import IdempotencyKey, check_dedup, is_deduped, mark_dedup
+from fde_component.jobs.idempotency import (
+    IdempotencyKey,
+    check_dedup,
+    claim_dedup,
+    complete_dedup,
+    is_deduped,
+    mark_dedup,
+)
 from fde_component.jobs.exceptions import DedupDuplicate
 
 
@@ -168,3 +176,78 @@ class TestDedupOperations:
         # both exist independently
         assert is_deduped(TEST_JOB_TYPE, key_a) is True
         assert is_deduped("other.job", key_b) is True
+
+
+class TestClaimOwnership(unittest.TestCase):
+    """
+    complete_dedup must only complete a record the caller
+    claimed. A foreign claimed_by blocks completion; an
+    empty/NULL claimed_by is treated as ours (legacy rows
+    written before claimed_by existed).
+
+    Requires a live Frappe DB (run via `bench run-tests`).
+    """
+
+    def setUp(self):
+        frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
+        frappe.db.commit()
+
+    def tearDown(self):
+        frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
+        frappe.db.commit()
+
+    def _insert_claim(self, key, claimed_by):
+        """Insert an in_progress dedup row with a given claimed_by."""
+        doc = frappe.new_doc("SyncJobDedup")
+        doc.job_type = TEST_JOB_TYPE
+        doc.idempotency_key = key.hex
+        doc.source_id = key.hex[:8]
+        doc.sync_job_id = TEST_SYNC_JOB
+        doc.status = "in_progress"
+        doc.claimed_by = claimed_by
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+    def test_own_claim_completes(self):
+        key = _make_key(f"own-{id(self)}")
+        self._insert_claim(key, TEST_SYNC_JOB)
+        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, TEST_SYNC_JOB))
+        self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
+
+    def test_foreign_claim_not_completed(self):
+        key = _make_key(f"foreign-{id(self)}")
+        self._insert_claim(key, "SJ-OTHER-WORKER")
+        # Another worker's claim must NOT be completed by us
+        self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, TEST_SYNC_JOB))
+        # Row still in_progress, owned by the other worker
+        status = frappe.db.get_value(
+            "SyncJobDedup",
+            {"job_type": TEST_JOB_TYPE, "idempotency_key": key.hex},
+            "status",
+        )
+        self.assertEqual(status, "in_progress")
+
+    def test_empty_claimed_by_treated_as_ours(self):
+        key = _make_key(f"empty-{id(self)}")
+        # Legacy row: claimed_by is NULL (backfilled rows, old patches)
+        self._insert_claim(key, None)
+        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, TEST_SYNC_JOB))
+        self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
+
+    def test_no_sync_job_id_completes_legacy_row(self):
+        key = _make_key(f"legacy-{id(self)}")
+        self._insert_claim(key, "SJ-SOME-OTHER")
+        # sync_job_id omitted (legacy mark_dedup path): ownership
+        # check is skipped, preserving pre-existing behavior
+        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key))
+        self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
+
+    def test_claim_and_complete_roundtrip(self):
+        """Full lifecycle: claim as SJ-A, complete as SJ-A, verify
+        the row is completed and no longer in_progress."""
+        key = _make_key(f"roundtrip-{id(self)}")
+        self.assertTrue(claim_dedup(TEST_JOB_TYPE, key, "msg-rt", "SJ-A"))
+        self.assertTrue(complete_dedup(TEST_JOB_TYPE, key, "SJ-A"))
+        self.assertTrue(is_deduped(TEST_JOB_TYPE, key))
+        # A second completion attempt finds no in_progress row
+        self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, "SJ-A"))

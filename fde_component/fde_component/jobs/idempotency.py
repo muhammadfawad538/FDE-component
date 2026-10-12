@@ -143,26 +143,38 @@ def claim_dedup(job_type: str, key: IdempotencyKey, source_id: str, sync_job_id:
         return False
 
 
-def complete_dedup(job_type: str, key: IdempotencyKey) -> None:
+def complete_dedup(job_type: str, key: IdempotencyKey, sync_job_id: str | None = None) -> bool:
     """
     Mark a claimed record as completed by updating status from
     'in_progress' to 'completed'.
 
-    If the row is already 'completed' (e.g. another worker finished it),
-    this is a no-op.
+    Only the worker that claimed the record may complete it:
+    when *sync_job_id* is given, the UPDATE also requires
+    ``claimed_by`` to match it (a NULL/empty ``claimed_by``
+    is treated as ours, for rows written before claimed_by
+    existed or by mark_dedup's legacy path).
+
+    Returns True if this call completed the record, False if
+    the row was already completed or was claimed by another
+    worker (the caller should then fail the job — the record
+    was processed by someone else).
     """
     try:
-        frappe.db.sql(
+        result = frappe.db.sql(
             """
             UPDATE `tabSyncJobDedup`
             SET `status` = 'completed'
             WHERE `job_type` = %s AND `idempotency_key` = %s AND `status` = 'in_progress'
+              AND (%s IS NULL OR `claimed_by` IS NULL OR `claimed_by` = '' OR `claimed_by` = %s)
             """,
-            (job_type, key.hex),
+            (job_type, key.hex, sync_job_id, sync_job_id),
         )
         frappe.db.commit()
+        rowcount = result[0][0] if result and result[0] else 0
+        return rowcount > 0
     except Exception:
         frappe.db.rollback()
+        return False
 
 
 def reclaim_stale_claims(job_type: str, older_than_seconds: int = 3600) -> int:
@@ -225,14 +237,14 @@ def mark_dedup(
         # Another worker already claimed this exact (key, in_progress)
         frappe.db.rollback()
         # Try to complete if the other worker already finished
-        complete_dedup(job_type, key)
+        complete_dedup(job_type, key, sync_job_id)
         return
     except Exception:
         frappe.db.rollback()
         return
 
     # Phase 2: complete
-    complete_dedup(job_type, key)
+    complete_dedup(job_type, key, sync_job_id)
 
 
 def is_deduped(job_type: str, key: IdempotencyKey) -> bool:
