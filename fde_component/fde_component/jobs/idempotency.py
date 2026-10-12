@@ -180,6 +180,36 @@ def complete_dedup(job_type: str, key: IdempotencyKey, sync_job_id: str | None =
         return False
 
 
+def reclaim_own_claims(job_type: str, sync_job_id: str) -> int:
+    """
+    Delete this job's own stale 'in_progress' dedup rows.
+
+    A job killed mid-run leaves its claims in_progress.
+    reclaim_stale_claims() will not free them while the
+    SyncJob is Running, and a SIGKILLed job stays
+    Running until the recovery sweep moves it to
+    Interrupted. When the job is resumed, it is not
+    Running concurrently with itself, so its own
+    in_progress rows are safe to delete — this lets
+    the resumed run reprocess records it claimed but
+    never completed.
+
+    Returns the number of rows deleted.
+    """
+    try:
+        result = frappe.db.sql("""
+            DELETE FROM `tabSyncJobDedup`
+            WHERE `job_type` = %s
+              AND `status` = 'in_progress'
+              AND `claimed_by` = %s
+        """, (job_type, sync_job_id))
+        frappe.db.commit()
+        return result[0][0] if result and result[0] else 0
+    except Exception:
+        frappe.db.rollback()
+        return 0
+
+
 def reclaim_stale_claims(job_type: str, older_than_seconds: int = 3600) -> int:
     """
     Delete stale 'in_progress' dedup rows so the record can be reclaimed
