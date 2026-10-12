@@ -138,5 +138,75 @@ class TestEnqueueScheduleRace(SchedulerTestCase):
         self.assertNotEqual(jobs[0]["name"], jobs[1]["name"])
 
 
+class TestSweepEndToEnd(SchedulerTestCase):
+    """
+    enqueue_due_schedules() end to end: a due schedule
+    fires once, a not-yet-due schedule does not fire,
+    and a schedule that never fired (NULL last_fired)
+    fires.
+    """
+
+    def _run_sweep(self):
+        """Run the real sweep with frappe.enqueue patched
+        out (no worker in tests)."""
+        from fde_component.jobs.scheduler import enqueue_due_schedules
+        with patch("frappe.enqueue") as mock_enqueue:
+            enqueue_due_schedules()
+        return mock_enqueue
+
+    def test_due_schedule_fires_once_then_not_due(self):
+        """A due schedule with non-NULL last_fired (with
+        non-zero microseconds) fires once and advances
+        last_fired; a second sweep does not fire it again."""
+        import frappe
+
+        # Non-zero microseconds, non-NULL last_fired
+        previous = now_datetime().replace(
+            microsecond=123456,
+        ) - timedelta(minutes=10)
+        self.assertNotEqual(previous.microsecond, 0)
+
+        sched_name = self._make_schedule(last_fired=previous)
+
+        # get_all returns last_fired as a string - confirm
+        # the type the sweep actually sees
+        sched = self._get_sched(sched_name)
+        print(f"DEBUG last_fired type={type(sched['last_fired'])} "
+              f"value={sched['last_fired']!r}")
+
+        # First sweep: due (last_fired is 10 minutes ago,
+        # cron fires every 5 minutes)
+        mock_enqueue = self._run_sweep()
+        jobs = frappe.db.count("SyncJob", {"job_type": TEST_JOB_TYPE})
+        self.assertEqual(jobs, 1, "due schedule must fire once")
+        self.assertEqual(mock_enqueue.call_count, 1)
+
+        advanced = frappe.db.get_value(
+            "SyncSchedule", sched_name, "last_fired")
+        self.assertIsNotNone(advanced)
+        self.assertNotEqual(str(advanced), str(previous))
+
+        # Second sweep: last_fired just advanced, so the
+        # next cron slot (5 minutes away) has not passed
+        mock_enqueue2 = self._run_sweep()
+        jobs2 = frappe.db.count("SyncJob", {"job_type": TEST_JOB_TYPE})
+        self.assertEqual(jobs2, 1, "not-yet-due schedule must not fire")
+        self.assertEqual(mock_enqueue2.call_count, 0)
+
+    def test_null_last_fired_fires(self):
+        """A schedule that never fired (NULL last_fired)
+        is treated as due and fires once."""
+        import frappe
+        sched_name = self._make_schedule(last_fired=None)
+        self.assertIsNone(
+            frappe.db.get_value("SyncSchedule", sched_name, "last_fired"),
+        )
+
+        mock_enqueue = self._run_sweep()
+        jobs = frappe.db.count("SyncJob", {"job_type": TEST_JOB_TYPE})
+        self.assertEqual(jobs, 1, "never-fired schedule must fire")
+        self.assertEqual(mock_enqueue.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
