@@ -189,15 +189,18 @@ class TestClaimOwnership(unittest.TestCase):
     """
 
     def setUp(self):
+        import frappe
         frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
         frappe.db.commit()
 
     def tearDown(self):
+        import frappe
         frappe.db.delete("SyncJobDedup", {"job_type": TEST_JOB_TYPE})
         frappe.db.commit()
 
     def _insert_claim(self, key, claimed_by):
         """Insert an in_progress dedup row with a given claimed_by."""
+        import frappe
         doc = frappe.new_doc("SyncJobDedup")
         doc.job_type = TEST_JOB_TYPE
         doc.idempotency_key = key.hex
@@ -220,6 +223,7 @@ class TestClaimOwnership(unittest.TestCase):
         # Another worker's claim must NOT be completed by us
         self.assertFalse(complete_dedup(TEST_JOB_TYPE, key, TEST_SYNC_JOB))
         # Row still in_progress, owned by the other worker
+        import frappe
         status = frappe.db.get_value(
             "SyncJobDedup",
             {"job_type": TEST_JOB_TYPE, "idempotency_key": key.hex},
